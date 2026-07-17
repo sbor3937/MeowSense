@@ -1,6 +1,7 @@
 # MeowSense
 
-[![Version](https://img.shields.io/badge/version-0.1.1-blue.svg)](CHANGELOG.md)
+[![CI](https://github.com/sbor3937/MeowSense/actions/workflows/ci.yml/badge.svg)](https://github.com/sbor3937/MeowSense/actions/workflows/ci.yml)
+[![Version](https://img.shields.io/badge/version-0.1.2-blue.svg)](CHANGELOG.md)
 [![Python 3.11](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
@@ -154,6 +155,27 @@ Both run top-to-bottom against a freshly downloaded dataset.
 | Mel filters | 40, spanning 50–4000 Hz |
 | MFCCs | 13 (+ deltas) |
 | CNN input | 40 × 128 (≈2.05 s, centre-cropped / padded) |
+
+---
+
+## Development
+
+Run the tests with [pytest](https://docs.pytest.org):
+
+```bash
+pip install pytest
+
+pytest -m "not data"   # 40 hermetic unit tests, no dataset needed (~5 s)
+pytest                 # also runs the reproduction tests (needs data/raw)
+```
+
+The unit tests synthesize their own audio and cover the DSP path and metadata
+parsing. The `data`-marked tests assert that the numbers in the [Results](#results)
+table still hold on the real dataset; they auto-skip if `data/raw` is absent.
+
+Both run in [CI](.github/workflows/ci.yml) on every push — the `reproduce` job
+downloads CatMeows and re-checks the baseline accuracies, so a regression that
+changed a reported number would fail the build.
 
 ---
 

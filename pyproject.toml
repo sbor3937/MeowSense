@@ -8,7 +8,7 @@
 
 [project]
 name = "meowsense"
-version = "0.1.1"
+version = "0.1.2"
 description = "Open, reproducible benchmarks for cat vocalization classification on the CatMeows dataset."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -43,8 +43,19 @@ dependencies = [
   "jupyter>=1.0",
 ]
 
+[project.optional-dependencies]
+# Test-only tooling. Install with: pip install -e ".[dev]"  (once the package
+# is installable) or simply: pip install pytest
+dev = ["pytest>=7.0"]
+
 [project.urls]
 Homepage = "https://github.com/sbor3937/MeowSense"
 Repository = "https://github.com/sbor3937/MeowSense"
 Issues = "https://github.com/sbor3937/MeowSense/issues"
 Changelog = "https://github.com/sbor3937/MeowSense/blob/main/CHANGELOG.md"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+  "data: requires the CatMeows dataset in data/raw (deselect with -m 'not data')",
+]

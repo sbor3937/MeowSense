@@ -13,16 +13,27 @@ still change. Breaking changes to any of those will bump the **minor** version.
 Planned, in priority order (see the [README roadmap](README.md#roadmap) and
 [`docs/ROADMAP.md`](docs/ROADMAP.md) for detail):
 
-- **Tests** for the filename parser, mel filterbank and spectrogram padding —
-  the parts most likely to break silently.
-- **CI** that downloads CatMeows and reproduces the baseline table on every
-  push, turning "reproducible" from a claim into a checked fact.
 - **Fix the CNN validation protocol**: hold out a cat-grouped validation split
   for monitoring and touch the test split exactly once.
 - **Cache the mel filterbank** (currently rebuilt per clip — roughly half of
   feature-extraction time).
 - **Transfer-learning baseline** — frozen YAMNet embeddings + a linear probe.
-- **Version pinning** (dependency upper bounds) once CI can catch breakage.
+- **Version pinning** (dependency upper bounds), now that CI can catch breakage.
+
+## [0.1.2] - 2026-07-17
+
+### Added
+- **Test suite** (`tests/`, pytest). 40 hermetic unit tests covering the
+  filename parser, mel filterbank, spectrograms, fixed-size framing, WAV I/O and
+  dataset scanning — all on synthesized audio, no network or dataset needed.
+- **Reproduction tests** (`tests/test_reproduce.py`, marked `data`) that assert
+  the class balance and the baseline accuracies (RandomForest ≈ 0.49,
+  SVM-RBF ≈ 0.52) actually hold on the real dataset.
+- **Continuous integration** (`.github/workflows/ci.yml`): a fast hermetic unit
+  job on every push, plus a `reproduce` job that downloads CatMeows (cached) and
+  runs the reproduction tests — making "every number reproduces" a checked fact.
+- `dev` optional-dependency group and pytest configuration in `pyproject.toml`;
+  CI badge and a "Development" section in the README.
 
 ## [0.1.1] - 2026-07-17
 
@@ -56,6 +67,7 @@ the documented commands.
   CatMeows dataset stays CC BY 4.0 and is not redistributed), and a README with
   the verified results table.
 
-[Unreleased]: https://github.com/sbor3937/MeowSense/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/sbor3937/MeowSense/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/sbor3937/MeowSense/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/sbor3937/MeowSense/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/sbor3937/MeowSense/releases/tag/v0.1.0

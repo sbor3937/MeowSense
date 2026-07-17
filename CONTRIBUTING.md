@@ -28,8 +28,10 @@ documented command, that is a bug. Please open an issue.
   to add, and useful for showing where the real ceiling is.
 - **Better features** — pitch tracking, jitter/shimmer, formant estimates.
   Feline distress calls plausibly differ in ways MFCCs smooth over.
-- **Tests** — `src/features.py` has none. The filename parser and the mel
-  filterbank are both easy to test and easy to get subtly wrong.
+- **More tests** — `tests/` covers the DSP path and metadata parsing; the
+  training scripts (splitting, class weights, the leak assertions) are still
+  thin. New models should arrive with a reproduction test in the style of
+  `tests/test_reproduce.py`.
 - **Documentation fixes** — including telling us where the docs are unclear.
 
 Roadmap item 2 (the Telegram bot) needs someone comfortable owning a
@@ -48,7 +50,15 @@ pip install -r requirements.txt
 
 python src/download_data.py      # ~8.9 MB from Zenodo
 python src/train_baseline.py     # should reproduce the README table
+
+pip install pytest
+pytest -m "not data"             # fast hermetic tests, no dataset needed
+pytest                           # full suite, incl. reproduction checks
 ```
+
+CI runs the same tests on every push. Please make sure `pytest` is green before
+opening a PR; if you change anything that affects a reported number, update both
+the README table and the assertion in `tests/test_reproduce.py`.
 
 ## Code style
 
