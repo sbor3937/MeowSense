@@ -1,0 +1,50 @@
+# Project metadata for MeowSense.
+#
+# This file is the single source of truth for the project version. It holds
+# declarative PEP 621 metadata only: MeowSense is not yet pip-installable, so
+# there is deliberately no [build-system] table. Turning the src/ modules into
+# a proper installable package (with an importable `__version__`) is tracked in
+# CHANGELOG.md under "Unreleased".
+
+[project]
+name = "meowsense"
+version = "0.1.1"
+description = "Open, reproducible benchmarks for cat vocalization classification on the CatMeows dataset."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "sbor3937" }]
+keywords = [
+  "bioacoustics",
+  "audio-classification",
+  "machine-learning",
+  "cats",
+  "mfcc",
+  "reproducible-research",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3.11",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+# Runtime dependencies mirror requirements.txt. Version *pinning* (upper bounds)
+# is deliberately deferred until CI exists to catch dependency breakage --
+# see CHANGELOG "Unreleased". matplotlib 3.11 already broke a notebook once.
+dependencies = [
+  "numpy>=1.24,<3",
+  "scipy>=1.10",
+  "scikit-learn>=1.3",
+  "torch>=2.0",
+  "matplotlib>=3.7",
+  "pandas>=2.0",
+  "jupyter>=1.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/sbor3937/MeowSense"
+Repository = "https://github.com/sbor3937/MeowSense"
+Issues = "https://github.com/sbor3937/MeowSense/issues"
+Changelog = "https://github.com/sbor3937/MeowSense/blob/main/CHANGELOG.md"
