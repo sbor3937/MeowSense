@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, asdict
+from functools import lru_cache
 from pathlib import Path
 from typing import Iterable
 
@@ -292,6 +293,7 @@ def _mel_to_hz(mel: np.ndarray | float) -> np.ndarray | float:
     return 700.0 * (10.0 ** (np.asarray(mel, dtype=np.float64) / 2595.0) - 1.0)
 
 
+@lru_cache(maxsize=32)
 def mel_filterbank(
     sample_rate: int = SAMPLE_RATE,
     n_fft: int = N_FFT,
@@ -304,6 +306,12 @@ def mel_filterbank(
     Filters are area-normalized (Slaney style) so that wide high-frequency
     filters do not dominate narrow low-frequency ones.
 
+    The result depends only on the (hashable) arguments, so it is cached: a full
+    dataset pass calls this once per unique setting instead of once per clip,
+    which removed roughly half of feature-extraction time. Because the cached
+    array is shared across all callers, it is returned read-only; callers that
+    need to mutate a filterbank should copy it first.
+
     Args:
         sample_rate: Sample rate of the signal.
         n_fft: FFT size used for the spectrogram.
@@ -312,7 +320,7 @@ def mel_filterbank(
         fmax: Highest band edge, in Hz. Must not exceed Nyquist.
 
     Returns:
-        Array of shape ``(n_mels, n_fft // 2 + 1)``.
+        Read-only array of shape ``(n_mels, n_fft // 2 + 1)``.
 
     Raises:
         ValueError: If the band edges are not ``0 <= fmin < fmax <= Nyquist``.
@@ -341,6 +349,9 @@ def mel_filterbank(
     enorm = 2.0 / (hz_edges[2 : n_mels + 2] - hz_edges[:n_mels])
     fb *= enorm[:, None]
 
+    # Cached and shared -> freeze so an accidental in-place write can't corrupt
+    # every future caller's filterbank.
+    fb.flags.writeable = False
     return fb
 
 

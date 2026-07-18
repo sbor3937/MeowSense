@@ -1,9 +1,12 @@
 # MeowSense Roadmap
 
 The baselines in this repository establish an honest starting point: on the
-CatMeows dataset, with validation grouped strictly by cat, **MFCC + classical
-classifiers land around the majority-class baseline (~0.50), and a CNN trained
-from scratch does worse.** Everything below follows from that result.
+CatMeows dataset, with validation grouped strictly by cat, **every model —
+MFCC + classical classifiers and a from-scratch CNN alike — lands within noise
+of the majority-class baseline (~0.50).** The CNN, given a proper
+validation-based stopping rule, ties the SVM at ~0.53 but needs far more compute
+to do it and beats neither the baseline nor the cheap MFCC models. Everything
+below follows from that result.
 
 The three workstreams are ordered by how much they would move the number:
 
@@ -112,10 +115,12 @@ Non-negotiable, and the reason this is a design document rather than code:
 **This is the highest-leverage change available today**, and unlike the bot it
 needs no new data.
 
-`src/train_cnn.py` documents a negative result: 23k parameters trained from
-scratch on ~300 clips cannot learn general acoustic structure. The fix is to not
-learn it from scratch. Models pretrained on AudioSet (~2M clips) already encode
-"what animal vocalizations sound like"; we only need to learn the last step.
+`src/train_cnn.py` documents the ceiling of learning from scratch: 23k
+parameters on ~300 clips only manage to *tie* a one-line MFCC SVM (~0.53), at a
+large compute premium and still within noise of the baseline. That is the signal
+to stop scaling the network. Models pretrained on AudioSet (~2M clips) already
+encode "what animal vocalizations sound like"; we only need to learn the last
+step.
 
 | Model | Pretraining | Notes |
 |---|---|---|

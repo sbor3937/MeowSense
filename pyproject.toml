@@ -8,7 +8,7 @@
 
 [project]
 name = "meowsense"
-version = "0.1.2"
+version = "0.1.3"
 description = "Open, reproducible benchmarks for cat vocalization classification on the CatMeows dataset."
 readme = "README.md"
 requires-python = ">=3.11"

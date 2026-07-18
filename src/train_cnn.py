@@ -13,9 +13,14 @@ Design notes:
   :mod:`train_baseline` -- the model is only scored on cats it has never heard.
   Without this, accuracy is inflated by voice recognition rather than context
   recognition.
+* **The test split is touched exactly once.** The training cats are split again
+  into a train subset and a cat-grouped *validation* subset; validation accuracy
+  drives both the per-epoch monitoring and the choice of which epoch's weights
+  to keep. The test set is never seen during training, and there is no arbitrary
+  fixed stopping epoch. See :func:`run_fold`.
 * Class weights compensate for the 221/127/92 context imbalance.
-* Per-band normalization statistics are computed on the *training* split only
-  and then applied to the test split, so no test statistics leak.
+* Per-band normalization statistics are computed on the *training subset* only
+  and then applied to validation and test, so neither leaks into the scaling.
 
 Usage::
 
@@ -28,6 +33,7 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import copy
 import random
 import sys
 from pathlib import Path
@@ -108,60 +114,53 @@ class SmallCNN(nn.Module):
 
 
 def normalize_splits(
-    X_train: np.ndarray, X_test: np.ndarray
-) -> tuple[np.ndarray, np.ndarray]:
+    X_train: np.ndarray, *others: np.ndarray
+) -> tuple[np.ndarray, ...]:
     """Standardize per mel band using training-split statistics only.
+
+    The mean and std come from ``X_train`` alone and are applied to it and to
+    every array in ``others``. This is how the validation and test splits get
+    normalized without leaking their statistics into training.
 
     Args:
         X_train: Training spectrograms, shape ``(n, n_mels, n_frames)``.
-        X_test: Test spectrograms, same trailing shape.
+        *others: Further splits (validation, test) to normalize with the same
+            training statistics.
 
     Returns:
-        The normalized ``(X_train, X_test)``.
+        The normalized arrays, in the order given (train first).
     """
     mean = X_train.mean(axis=(0, 2), keepdims=True)
     std = X_train.std(axis=(0, 2), keepdims=True) + 1e-8
-    return (X_train - mean) / std, (X_test - mean) / std
+    return tuple((X - mean) / std for X in (X_train, *others))
 
 
-def make_loaders(
-    X_train: np.ndarray,
-    y_train: np.ndarray,
-    X_test: np.ndarray,
-    y_test: np.ndarray,
+def make_loader(
+    X: np.ndarray,
+    y: np.ndarray,
     batch_size: int,
+    shuffle: bool,
     seed: int,
-) -> tuple[DataLoader, DataLoader]:
-    """Wrap the numpy splits in deterministic Torch dataloaders.
+) -> DataLoader:
+    """Wrap one normalized split in a deterministic Torch dataloader.
 
     Args:
-        X_train: Normalized training spectrograms.
-        y_train: Integer training labels.
-        X_test: Normalized test spectrograms.
-        y_test: Integer test labels.
+        X: Normalized spectrograms, shape ``(n, n_mels, n_frames)``.
+        y: Integer labels.
         batch_size: Minibatch size.
-        seed: Seed for the shuffling generator.
+        shuffle: Whether to shuffle (True for training, False for eval).
+        seed: Seed for the shuffling generator (ignored when ``shuffle`` is
+            False).
 
     Returns:
-        ``(train_loader, test_loader)``.
+        A configured :class:`~torch.utils.data.DataLoader`.
     """
-
-    def to_tensor(X: np.ndarray, y: np.ndarray) -> TensorDataset:
-        return TensorDataset(
-            torch.from_numpy(X).float().unsqueeze(1),  # (N, 1, n_mels, n_frames)
-            torch.from_numpy(y).long(),
-        )
-
-    generator = torch.Generator().manual_seed(seed)
-    return (
-        DataLoader(
-            to_tensor(X_train, y_train),
-            batch_size=batch_size,
-            shuffle=True,
-            generator=generator,
-        ),
-        DataLoader(to_tensor(X_test, y_test), batch_size=batch_size, shuffle=False),
+    dataset = TensorDataset(
+        torch.from_numpy(X).float().unsqueeze(1),  # (N, 1, n_mels, n_frames)
+        torch.from_numpy(y).long(),
     )
+    generator = torch.Generator().manual_seed(seed) if shuffle else None
+    return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, generator=generator)
 
 
 def train_one_epoch(
@@ -209,42 +208,73 @@ def evaluate(
 def run_fold(
     X: np.ndarray,
     y: np.ndarray,
+    groups: np.ndarray,
     train_idx: np.ndarray,
     test_idx: np.ndarray,
     args: argparse.Namespace,
     device: torch.device,
     verbose: bool = True,
-) -> tuple[np.ndarray, np.ndarray, nn.Module]:
-    """Train SmallCNN on one train/test split and predict the test split.
+) -> tuple[np.ndarray, np.ndarray, float, nn.Module]:
+    """Train SmallCNN with a cat-grouped validation split; score test once.
+
+    The training indices are split *again* by cat into a training subset and a
+    validation subset. Validation accuracy -- never test accuracy -- drives
+    both the per-epoch monitoring and the choice of which epoch's weights to
+    keep. The test split is untouched until the very end, where it is evaluated
+    exactly once on the best-on-validation checkpoint.
+
+    This fixes two problems the earlier fixed-60-epochs loop had: it watched the
+    test set while training (a leak in spirit if not in fit), and it reported
+    whatever epoch 60 happened to give (an arbitrary stopping point).
+
+    Normalization statistics come from the training *subset* only, so neither
+    validation nor test leaks into the per-band mean/std either.
 
     Args:
         X: All spectrograms, shape ``(n, n_mels, n_frames)``.
         y: All integer labels.
-        train_idx: Indices of the training clips.
-        test_idx: Indices of the test clips.
-        args: Parsed CLI arguments (epochs, lr, batch size, ...).
+        groups: Cat IDs for every clip, used for the train/validation sub-split.
+        train_idx: Indices of the training clips (further split into train/val).
+        test_idx: Indices of the held-out test clips.
+        args: Parsed CLI arguments (epochs, lr, batch size, val_size, ...).
         device: Torch device to train on.
         verbose: Whether to print per-epoch progress.
 
     Returns:
-        ``(y_true, y_pred, model)`` for the test split.
+        ``(y_true, y_pred, best_val_acc, model)`` for the test split.
     """
-    X_train, X_test = normalize_splits(X[train_idx], X[test_idx])
-    y_train, y_test = y[train_idx], y[test_idx]
-
-    train_loader, test_loader = make_loaders(
-        X_train, y_train, X_test, y_test, args.batch_size, args.seed
+    # Split the training cats into a train subset and a validation subset.
+    val_splitter = GroupShuffleSplit(
+        n_splits=1, test_size=args.val_size, random_state=args.seed
     )
+    sub_tr, sub_val = next(
+        val_splitter.split(train_idx, y[train_idx], groups[train_idx])
+    )
+    tr_idx, val_idx = train_idx[sub_tr], train_idx[sub_val]
+    assert not set(groups[tr_idx]) & set(groups[val_idx]), "cat leaked into validation"
+    assert not (set(groups[tr_idx]) | set(groups[val_idx])) & set(
+        groups[test_idx]
+    ), "cat leaked into test"
+
+    # Normalize val and test with the train-subset statistics only.
+    X_tr, X_val, X_test = normalize_splits(X[tr_idx], X[val_idx], X[test_idx])
+    y_tr, y_val, y_test = y[tr_idx], y[val_idx], y[test_idx]
+
+    train_loader = make_loader(X_tr, y_tr, args.batch_size, shuffle=True, seed=args.seed)
+    val_loader = make_loader(X_val, y_val, args.batch_size, shuffle=False, seed=args.seed)
+    test_loader = make_loader(X_test, y_test, args.batch_size, shuffle=False, seed=args.seed)
 
     model = SmallCNN(n_classes=len(CLASS_ORDER), dropout=args.dropout).to(device)
 
-    # Inverse-frequency class weights, computed on the training split only.
-    counts = np.bincount(y_train, minlength=len(CLASS_ORDER)).astype(np.float64)
+    # Inverse-frequency class weights, computed on the training subset only.
+    counts = np.bincount(y_tr, minlength=len(CLASS_ORDER)).astype(np.float64)
     weights = counts.sum() / (len(CLASS_ORDER) * np.maximum(counts, 1))
 
     if verbose:
         n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
         print(f"SmallCNN: {n_params:,} trainable parameters")
+        print(f"train: {len(tr_idx):3d} clips / {len(set(groups[tr_idx])):2d} cats   "
+              f"val: {len(val_idx):3d} clips / {len(set(groups[val_idx])):2d} cats")
         pretty = {CONTEXT_LABELS[c]: round(float(w), 2) for c, w in zip(CLASS_ORDER, weights)}
         print(f"class weights: {pretty}\n")
 
@@ -256,16 +286,32 @@ def run_fold(
     )
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
 
+    best_val_acc = -1.0
+    best_epoch = 0
+    best_state = copy.deepcopy(model.state_dict())
+
     for epoch in range(1, args.epochs + 1):
         loss = train_one_epoch(model, train_loader, criterion, optimizer, device)
         scheduler.step()
+
+        val_true, val_pred = evaluate(model, val_loader, device)
+        val_acc = accuracy_score(val_true, val_pred)
+        if val_acc > best_val_acc:
+            best_val_acc = val_acc
+            best_epoch = epoch
+            best_state = copy.deepcopy(model.state_dict())
+
         if verbose and (epoch % 10 == 0 or epoch == 1):
-            _, y_pred = evaluate(model, test_loader, device)
-            acc = accuracy_score(y_test, y_pred)
-            print(f"  epoch {epoch:3d}/{args.epochs}  loss={loss:.4f}  test_acc={acc:.3f}")
+            print(f"  epoch {epoch:3d}/{args.epochs}  loss={loss:.4f}  val_acc={val_acc:.3f}")
+
+    # Restore the best-on-validation weights, then touch the test set once.
+    model.load_state_dict(best_state)
+    if verbose:
+        print(f"  best val_acc={best_val_acc:.3f} at epoch {best_epoch}; "
+              "evaluating test split once")
 
     y_true, y_pred = evaluate(model, test_loader, device)
-    return y_true, y_pred, model
+    return y_true, y_pred, best_val_acc, model
 
 
 def main() -> int:
@@ -281,6 +327,13 @@ def main() -> int:
     parser.add_argument("--weight-decay", type=float, default=1e-4)
     parser.add_argument("--dropout", type=float, default=0.4)
     parser.add_argument("--test-size", type=float, default=0.3)
+    parser.add_argument(
+        "--val-size",
+        type=float,
+        default=0.2,
+        help="Fraction of the training cats held out for validation "
+             "(monitoring + best-epoch selection). Grouped by cat.",
+    )
     parser.add_argument(
         "--cv",
         type=int,
@@ -325,7 +378,9 @@ def main() -> int:
         for fold, (train_idx, test_idx) in enumerate(cv.split(X, y, groups), start=1):
             assert not set(groups[train_idx]) & set(groups[test_idx]), "cat leaked"
             set_seed(args.seed)  # each fold starts from the same initialization
-            y_true, y_pred, _ = run_fold(X, y, train_idx, test_idx, args, device, verbose=False)
+            y_true, y_pred, val_acc, _ = run_fold(
+                X, y, groups, train_idx, test_idx, args, device, verbose=False
+            )
 
             fold_acc = accuracy_score(y_true, y_pred)
             fold_base = majority_baseline(y_str[train_idx], y_str[test_idx])
@@ -334,8 +389,8 @@ def main() -> int:
             all_true.append(y_true)
             all_pred.append(y_pred)
             print(f"  fold {fold}/{args.cv}: {len(test_idx):3d} clips from "
-                  f"{len(set(groups[test_idx])):2d} cats  acc={fold_acc:.3f}  "
-                  f"baseline={fold_base:.3f}")
+                  f"{len(set(groups[test_idx])):2d} cats  test_acc={fold_acc:.3f}  "
+                  f"(val_acc={val_acc:.3f}, baseline={fold_base:.3f})")
 
         accs = np.array(fold_accs)
         base = float(np.mean(fold_bases))
@@ -361,7 +416,7 @@ def main() -> int:
         base = majority_baseline(y_str[train_idx], y_str[test_idx])
         print(f"majority-class baseline on this test split: {base:.2f}\n")
 
-        y_true, y_pred, model = run_fold(X, y, train_idx, test_idx, args, device)
+        y_true, y_pred, _, model = run_fold(X, y, groups, train_idx, test_idx, args, device)
         acc = accuracy_score(y_true, y_pred)
 
         print("\n" + "=" * 72)

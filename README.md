@@ -1,7 +1,7 @@
 # MeowSense
 
 [![CI](https://github.com/sbor3937/MeowSense/actions/workflows/ci.yml/badge.svg)](https://github.com/sbor3937/MeowSense/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-0.1.2-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.1.3-blue.svg)](CHANGELOG.md)
 [![Python 3.11](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
@@ -55,9 +55,9 @@ All numbers below are **5-fold GroupKFold grouped by cat ID** — each cat is en
 |---|---|---|
 | RandomForest (MFCC) | 0.49 ± 0.12 | 0.50 |
 | SVM-RBF (MFCC) | 0.52 ± 0.07 | 0.50 |
-| SmallCNN (mel-spec, from scratch) | 0.47 ± 0.06 | 0.50 |
+| SmallCNN (mel-spec, from scratch) | 0.53 ± 0.06 | 0.50 |
 
-**None of these models meaningfully beats the majority-class baseline.** That is the result. Reproduce it with `python src/train_baseline.py` and `python src/train_cnn.py --cv 5`.
+**No model meaningfully beats the majority-class baseline.** The SVM and the CNN edge above it (0.52–0.53), but by less than the fold-to-fold spread — so the honest reading is a tie with "always guess isolation". That is the result. Reproduce it with `python src/train_baseline.py` and `python src/train_cnn.py --cv 5`.
 
 ### Why the honest number is so much lower than a random split
 
@@ -74,9 +74,9 @@ This gap is the main reason this repository exists. Reproduce it in [`notebooks/
 
 ### Key findings
 
-- **`isolation` is the most separable class.** It has the highest precision of the three (0.64 RandomForest, 0.69 SVM, 0.74 CNN) and the best F1 (0.58 / 0.65 / 0.60). Distress calls are longer, louder and more tonal, and it is the one context with a plausible acoustic signature. Recall is nevertheless only ~0.5–0.6: "most separable" is not "solved".
-- **`food` is not recoverable from audio alone** (recall 0.22–0.41, the worst class for every model). "Waiting for food" describes a *situation*, not a sound. A cat asking for dinner and a cat enjoying a brush can vocalize near-identically. **A user-supplied context signal — time since last meal — would help more than any better classifier.**
-- **A CNN trained from scratch is not justified at this data size.** SmallCNN (23.6k parameters) scores below both the linear-ish baselines and the majority class. 300-odd training clips cannot teach general acoustic structure from zero. Transfer learning from AudioSet-pretrained models (YAMNet / PANNs / AST) is the sensible next step — see [`docs/ROADMAP.md`](docs/ROADMAP.md).
+- **`isolation` is the most separable class.** It is the best-recovered class for every model — isolation F1 is 0.58 / 0.65 / 0.68 for RandomForest / SVM / CNN, above each model's other two classes — with precision 0.64–0.69. Distress calls are longer, louder and more tonal, the one context with a plausible acoustic signature. Even so, recall tops out around 0.7: "most separable" is not "solved".
+- **`food` is not recoverable from audio alone** (recall 0.22–0.38, the worst class for every model). "Waiting for food" describes a *situation*, not a sound. A cat asking for dinner and a cat enjoying a brush can vocalize near-identically. **A user-supplied context signal — time since last meal — would help more than any better classifier.**
+- **A from-scratch CNN ties the SVM and earns nothing for it.** With a proper validation-based stopping rule (a cat-grouped validation split picks the epoch; the test set is touched once), SmallCNN reaches 0.53 ± 0.06 — level with the MFCC SVM and, like it, within noise of the 0.50 baseline. It needs far more compute than the baselines to match them and beats neither. *(An earlier fixed-60-epoch schedule under-reported this at 0.47 by scoring an arbitrary late epoch — a reminder that the protocol, not just the model, decides the number.)* 300-odd clips cannot teach general acoustic structure from zero; the way to add real signal is a better prior, not a bigger network — transfer learning from AudioSet-pretrained models (YAMNet / PANNs / AST), see [`docs/ROADMAP.md`](docs/ROADMAP.md).
 - **Fold variance swamps model choice.** Per-fold accuracy ranges 0.27–0.63. With 4–5 cats per fold, *which* cats you hold out matters more than which model you pick. The binding constraint is the number of cats, not the architecture.
 - **Validation is strictly grouped by cat ID.** No clip from a test cat is ever seen during training. Assertions in `train_baseline.py` and `train_cnn.py` enforce this rather than trusting it.
 
