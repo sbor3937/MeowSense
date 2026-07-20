@@ -1,7 +1,7 @@
 # MeowSense
 
 [![CI](https://github.com/sbor3937/MeowSense/actions/workflows/ci.yml/badge.svg)](https://github.com/sbor3937/MeowSense/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-0.1.3-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.2.0-blue.svg)](CHANGELOG.md)
 [![Python 3.11](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
@@ -51,13 +51,22 @@ Metadata is encoded in each filename (`C_NNNNN_BB_SS_OOOOO_RXX.wav`) — context
 
 All numbers below are **5-fold GroupKFold grouped by cat ID** — each cat is entirely in train or entirely in test, so every test clip comes from a cat the model has never heard. Reported as mean ± std across folds. Baseline = always predict the majority class (`isolation`, 50.2% of the data).
 
-| Model | Accuracy (unseen cats) | Baseline |
-|---|---|---|
-| RandomForest (MFCC) | 0.49 ± 0.12 | 0.50 |
-| SVM-RBF (MFCC) | 0.52 ± 0.07 | 0.50 |
-| SmallCNN (mel-spec, from scratch) | 0.53 ± 0.06 | 0.50 |
+| Model | Features | Accuracy (unseen cats) | Baseline |
+|---|---|---|---|
+| RandomForest | MFCC | 0.49 ± 0.12 | 0.50 |
+| SVM-RBF | MFCC | 0.52 ± 0.07 | 0.50 |
+| SmallCNN (from scratch) | mel-spec | 0.53 ± 0.06 | 0.50 |
+| LogReg probe | AST embeddings *(frozen)* | 0.58 ± 0.08 | 0.50 |
+| **SVM-RBF** | **AST embeddings *(frozen)*** | **0.60 ± 0.10** | 0.50 |
 
-**No model meaningfully beats the majority-class baseline.** The SVM and the CNN edge above it (0.52–0.53), but by less than the fold-to-fold spread — so the honest reading is a tie with "always guess isolation". That is the result. Reproduce it with `python src/train_baseline.py` and `python src/train_cnn.py --cv 5`.
+**Two findings, one negative and one positive.**
+
+1. **Nothing computed *from the audio itself* beats the baseline.** The MFCC models and the from-scratch CNN all land at 0.49–0.53 — at or within noise of "always guess isolation". More network does not help.
+2. **A better prior does.** Freezing an AudioSet-pretrained backbone (AST, 86M params) and training a linear-ish probe on its embeddings reaches **0.60 ± 0.10** — the first model here to clear the baseline, by roughly one fold-std. It beats its per-fold baseline in 4 of 5 folds and the MFCC SVM by +0.09 on average. The gain is real but modest, and it concentrates almost entirely in `isolation`.
+
+Reproduce with `python src/train_baseline.py`, `python src/train_cnn.py --cv 5`, and `python src/train_transfer.py`.
+
+> **Caveat on the AST numbers.** CatMeows is 8 kHz; AST expects 16 kHz. Upsampling restores the sample rate but not the missing 4–8 kHz band, so the backbone sees a spectrogram with an empty top half. The 0.60 is achieved *despite* that handicap — and is a direct argument for recording future data at 16 kHz+. Do not compare it against literature trained on native 16 kHz audio.
 
 ### Why the honest number is so much lower than a random split
 
@@ -74,9 +83,10 @@ This gap is the main reason this repository exists. Reproduce it in [`notebooks/
 
 ### Key findings
 
-- **`isolation` is the most separable class.** It is the best-recovered class for every model — isolation F1 is 0.58 / 0.65 / 0.68 for RandomForest / SVM / CNN, above each model's other two classes — with precision 0.64–0.69. Distress calls are longer, louder and more tonal, the one context with a plausible acoustic signature. Even so, recall tops out around 0.7: "most separable" is not "solved".
-- **`food` is not recoverable from audio alone** (recall 0.22–0.38, the worst class for every model). "Waiting for food" describes a *situation*, not a sound. A cat asking for dinner and a cat enjoying a brush can vocalize near-identically. **A user-supplied context signal — time since last meal — would help more than any better classifier.**
-- **A from-scratch CNN ties the SVM and earns nothing for it.** With a proper validation-based stopping rule (a cat-grouped validation split picks the epoch; the test set is touched once), SmallCNN reaches 0.53 ± 0.06 — level with the MFCC SVM and, like it, within noise of the 0.50 baseline. It needs far more compute than the baselines to match them and beats neither. *(An earlier fixed-60-epoch schedule under-reported this at 0.47 by scoring an arbitrary late epoch — a reminder that the protocol, not just the model, decides the number.)* 300-odd clips cannot teach general acoustic structure from zero; the way to add real signal is a better prior, not a bigger network — transfer learning from AudioSet-pretrained models (YAMNet / PANNs / AST), see [`docs/ROADMAP.md`](docs/ROADMAP.md).
+- **Transfer learning is the payoff, and it lands on `isolation`.** The AST probe's whole advantage is on the isolation/stress class: F1 0.76 (vs 0.65 for the best MFCC model), precision 0.79. A model that has heard 2M AudioSet clips recognises a distress call better than 13 MFCCs do — but its brushing and food F1 barely move. The pretrained prior sharpens the one class that has an acoustic signature; it does not conjure signal where there is none.
+- **`isolation` is the most separable class for every model.** It is each model's best-recovered class — isolation F1 runs 0.58 / 0.65 / 0.68 / 0.76 for RandomForest / MFCC-SVM / CNN / AST-SVM. Distress calls are longer, louder and more tonal, the one context with a plausible acoustic signature.
+- **`food` is not recoverable from audio alone — not even by an 86M-parameter model** (F1 ≤ 0.37 for every model, including the AST probe). "Waiting for food" describes a *situation*, not a sound: a cat asking for dinner and a cat enjoying a brush vocalize near-identically. That the pretrained backbone cannot recover it either is strong evidence this is a **label/context problem, not a representation problem**. **A user-supplied signal — time since last meal — would help more than any better model.**
+- **A from-scratch CNN ties the SVM and earns nothing for it.** With a proper validation-based stopping rule (a cat-grouped validation split picks the epoch; the test set is touched once), SmallCNN reaches 0.53 ± 0.06 — level with the MFCC SVM and, like it, within noise of the 0.50 baseline. It needs far more compute than the baselines to match them and beats neither. *(An earlier fixed-60-epoch schedule under-reported this at 0.47 by scoring an arbitrary late epoch — a reminder that the protocol, not just the model, decides the number.)* 300-odd clips cannot teach general acoustic structure from zero; the way to add real signal is a better prior, not a bigger network — which the AST probe above confirms.
 - **Fold variance swamps model choice.** Per-fold accuracy ranges 0.27–0.63. With 4–5 cats per fold, *which* cats you hold out matters more than which model you pick. The binding constraint is the number of cats, not the architecture.
 - **Validation is strictly grouped by cat ID.** No clip from a test cat is ever seen during training. Assertions in `train_baseline.py` and `train_cnn.py` enforce this rather than trusting it.
 
@@ -96,7 +106,13 @@ source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-`torch` is only needed for `src/train_cnn.py`. Skip it if you only want the MFCC baselines.
+`torch` is only needed for `src/train_cnn.py`. The transfer-learning path also needs `transformers` (a ~340 MB AudioSet model is downloaded on first run):
+
+```bash
+pip install transformers        # only for src/embeddings.py + src/train_transfer.py
+```
+
+Skip both if you only want the MFCC baselines.
 
 ---
 
@@ -132,7 +148,16 @@ python src/train_cnn.py               # single hold-out, faster
 
 SmallCNN on 40×128 log-mel spectrograms. Options: `--epochs`, `--lr`, `--batch-size`, `--dropout`, `--save-model PATH`.
 
-### 4. Explore the notebooks
+### 4. Train the transfer-learning probe
+
+```bash
+pip install transformers
+python src/train_transfer.py
+```
+
+Extracts frozen [AST](https://huggingface.co/MIT/ast-finetuned-audioset-10-10-0.4593) embeddings (cached to `data/embeddings/` — the first run is a ~30 min CPU pass, then instant) and fits a LogReg / SVM probe under the same GroupKFold protocol. This is the 0.60 row in the table. `src/embeddings.py` runs the extraction on its own if you want to cache first.
+
+### 5. Explore the notebooks
 
 ```bash
 jupyter notebook notebooks/
@@ -181,11 +206,15 @@ changed a reported number would fail the build.
 
 ## Roadmap
 
-See [`docs/ROADMAP.md`](docs/ROADMAP.md) for detail. In priority order:
+See [`docs/ROADMAP.md`](docs/ROADMAP.md) for detail.
 
-1. **Transfer learning** — frozen YAMNet / PANNs / AST embeddings + a linear probe, before any fine-tuning. Highest leverage, needs no new data. Target: clear 0.60 on unseen cats.
-2. **Telegram collection bot** — grow from 21 cats to hundreds. Owners send a voice note, the bot guesses, and they answer *guessed / wrong / don't know*. Cat ID mandatory; consent and deletion handled properly from day one.
-3. **A larger label space** — add `greeting`, `play`, and (carefully, with veterinary confirmation) `pain`.
+- ✅ **Transfer learning** — done. Frozen AST embeddings + a linear probe hit 0.60 on unseen cats (the target), the first model here to beat the baseline. Next within this thread: try YAMNet/PANNs, and partial fine-tuning.
+
+In priority order from here:
+
+1. **More data — a Telegram collection bot** — grow from 21 cats to hundreds. Owners send a voice note, the bot guesses, and they answer *guessed / wrong / don't know*. Cat ID mandatory; consent and deletion handled properly from day one. With the AST probe now capped at 0.60 partly by the 8 kHz audio and the tiny cat count, data is the binding constraint again.
+2. **A larger label space** — add `greeting`, `play`, and (carefully, with veterinary confirmation) `pain`.
+3. **Channel normalization** — decouple loudness (the `c0` coefficient, ~69% cat identity) from the context signal.
 
 **Non-goals:** shipping a "cat translator"; beating published numbers by relaxing the grouped-validation rule.
 

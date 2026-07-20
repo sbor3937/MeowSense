@@ -29,9 +29,10 @@ jobs:
           python-version: "3.11"
           cache: pip
 
-      # Feature tests need only the DSP stack, not sklearn/torch. Keep it lean.
-      - name: Install DSP + test deps
-        run: python -m pip install --upgrade pip numpy scipy "pytest>=7.0"
+      # DSP tests need only numpy/scipy; the probe plumbing tests also need
+      # scikit-learn (but not torch or transformers, which stay out of CI).
+      - name: Install DSP + probe + test deps
+        run: python -m pip install --upgrade pip numpy scipy scikit-learn "pytest>=7.0"
 
       - name: Run hermetic unit tests
         run: python -m pytest -q -m "not data"

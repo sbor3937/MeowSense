@@ -1,17 +1,18 @@
 # MeowSense Roadmap
 
 The baselines in this repository establish an honest starting point: on the
-CatMeows dataset, with validation grouped strictly by cat, **every model —
-MFCC + classical classifiers and a from-scratch CNN alike — lands within noise
-of the majority-class baseline (~0.50).** The CNN, given a proper
-validation-based stopping rule, ties the SVM at ~0.53 but needs far more compute
-to do it and beats neither the baseline nor the cheap MFCC models. Everything
-below follows from that result.
+CatMeows dataset, with validation grouped strictly by cat, **nothing computed
+from the audio itself beats the majority-class baseline (~0.50)** — MFCC
+classifiers and a from-scratch CNN all land at 0.49–0.53. The first thing to
+clear the bar was a **better prior**: frozen AudioSet-pretrained (AST) embeddings
++ a linear probe reach **0.60** (workstream 2 below, now implemented). Everything
+here follows from that shape of result — cheap priors help, more network does
+not, and the remaining ceiling looks like data and labels.
 
 The three workstreams are ordered by how much they would move the number:
 
-1. **More data** (the binding constraint) — [Telegram collection bot](#1-telegram-collection-bot)
-2. **Better priors** (cheap, high leverage) — [Transfer learning](#2-transfer-learning)
+1. **More data** (now the binding constraint) — [Telegram collection bot](#1-telegram-collection-bot)
+2. **Better priors** ✅ *(done — AST probe at 0.60)* — [Transfer learning](#2-transfer-learning)
 3. **A more useful label space** — [Expanding to 5-6 classes](#3-expanding-the-label-space)
 
 ---
@@ -148,16 +149,32 @@ recording the crowdsourced dataset at 16 kHz or higher from day one.
 
 ### Success criteria
 
-Frozen YAMNet embeddings + linear probe should clear **0.60 on unseen cats**
-(vs ~0.50 today) to justify the added dependency. If it does not, the ceiling is
-the labels, not the model — which would itself be a finding worth publishing.
+Frozen embeddings + linear probe should clear **0.60 on unseen cats** (vs ~0.50
+today) to justify the added dependency. If it does not, the ceiling is the
+labels, not the model — which would itself be a finding worth publishing.
+
+### Result (implemented — v0.2.0)
+
+**The frozen probe cleared the bar: AST embeddings + SVM reach 0.60 ± 0.10 on
+unseen cats** (`src/embeddings.py`, `src/train_transfer.py`), the first model in
+this repository to beat the majority-class baseline. Notes:
+
+- The gain over MFCC is +0.09 on average and concentrates almost entirely in
+  `isolation` (F1 0.76 vs 0.65). `food` stays unrecoverable even here (F1 0.35),
+  which is strong evidence it is a label/context problem, not a representation
+  problem — see the README key findings.
+- This was achieved **despite** the 8 kHz → 16 kHz handicap below, which caps
+  how much the pretrained prior can contribute.
+- Fold variance is large (±0.10); with 21 cats, more data would firm this up
+  more than a better backbone would.
 
 ### Milestones
 
-- [ ] `src/embeddings.py` — YAMNet/PANNs embedding extraction with caching
-- [ ] Linear probe on frozen embeddings, same GroupKFold protocol
-- [ ] Partial fine-tuning experiment
-- [ ] Add results to the README table under the *same* validation protocol
+- [x] `src/embeddings.py` — frozen embedding extraction with on-disk caching (AST)
+- [x] Linear probe on frozen embeddings, same GroupKFold protocol
+- [x] Results in the README table under the *same* validation protocol
+- [ ] Try YAMNet / PANNs (needs a TensorFlow path; only AST is wired up so far)
+- [ ] Partial fine-tuning experiment (unfreeze the last block or two)
 
 ---
 

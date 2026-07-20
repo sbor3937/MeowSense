@@ -8,7 +8,7 @@
 
 [project]
 name = "meowsense"
-version = "0.1.3"
+version = "0.2.0"
 description = "Open, reproducible benchmarks for cat vocalization classification on the CatMeows dataset."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -47,6 +47,10 @@ dependencies = [
 # Test-only tooling. Install with: pip install -e ".[dev]"  (once the package
 # is installable) or simply: pip install pytest
 dev = ["pytest>=7.0"]
+# Transfer-learning path (src/embeddings.py, src/train_transfer.py). Heavy and
+# optional -- the AudioSet backbone pulls in transformers. Not needed for the
+# MFCC baselines or the from-scratch CNN.
+transfer = ["transformers>=4.40"]
 
 [project.urls]
 Homepage = "https://github.com/sbor3937/MeowSense"

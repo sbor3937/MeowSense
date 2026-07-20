@@ -13,10 +13,42 @@ still change. Breaking changes to any of those will bump the **minor** version.
 Planned, in priority order (see the [README roadmap](README.md#roadmap) and
 [`docs/ROADMAP.md`](docs/ROADMAP.md) for detail):
 
-- **Transfer-learning baseline** — frozen YAMNet embeddings + a linear probe.
+- **More data — Telegram collection bot** (now the binding constraint).
+- **Transfer learning, continued** — try YAMNet / PANNs; partial fine-tuning.
 - **Channel-normalization experiment** — decouple loudness (the `c0` cepstral
   coefficient, ~69% cat identity / ~5% context) from the context signal.
 - **Version pinning** (dependency upper bounds), now that CI can catch breakage.
+
+## [0.2.0] - 2026-07-20
+
+First model to beat the baseline: transfer learning.
+
+### Added
+- **`src/embeddings.py`** — extracts frozen [AST](https://huggingface.co/MIT/ast-finetuned-audioset-10-10-0.4593)
+  (AudioSet-pretrained) embeddings, mean-pooled to one 768-d vector per clip,
+  cached to `data/embeddings/`. Resamples 8 kHz → 16 kHz (documented as a
+  handicap, not a fix — the missing 4–8 kHz band is not restored).
+- **`src/train_transfer.py`** — LogReg and SVM probes on the frozen embeddings,
+  under the identical 5-fold GroupKFold-by-cat protocol, so results are directly
+  comparable to the MFCC/CNN table.
+- **`tests/test_transfer.py`** — hermetic tests for the embedding cache
+  round-trip, probe construction and grouped-CV evaluation (need scikit-learn,
+  not `transformers`/`torch`/the dataset).
+- `transfer` optional-dependency group (`transformers`) in `pyproject.toml`.
+
+### Results
+- **AST embeddings + SVM: 0.60 ± 0.10** on unseen cats — clears the roadmap's
+  0.60 target and is the first model here to beat the 0.50 baseline (LogReg
+  probe: 0.58 ± 0.08). Deterministic across 10 seeds.
+- The advantage is +0.09 over the MFCC SVM on average and concentrates in
+  `isolation` (F1 0.76 vs 0.65). `food` stays unrecoverable (F1 0.35) even for
+  the 86M-parameter backbone — evidence it is a context problem, not a
+  representation problem.
+- README results table, key findings and roadmap updated accordingly.
+
+### Changed
+- CI unit job now installs scikit-learn so the probe plumbing tests run there
+  (`transformers` and `torch` stay out of CI).
 
 ## [0.1.3] - 2026-07-19
 
@@ -92,7 +124,8 @@ the documented commands.
   CatMeows dataset stays CC BY 4.0 and is not redistributed), and a README with
   the verified results table.
 
-[Unreleased]: https://github.com/sbor3937/MeowSense/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/sbor3937/MeowSense/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/sbor3937/MeowSense/compare/v0.1.3...v0.2.0
 [0.1.3]: https://github.com/sbor3937/MeowSense/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/sbor3937/MeowSense/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/sbor3937/MeowSense/compare/v0.1.0...v0.1.1
