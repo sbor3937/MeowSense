@@ -18,6 +18,35 @@ import embeddings as E  # noqa: E402
 import train_transfer as TT  # noqa: E402
 
 
+class TestBackboneRegistry:
+    def test_known_backbones_are_resolvable_by_short_name(self):
+        for name in E.BACKBONES:
+            cfg = E.resolve_backbone(name)
+            assert cfg["model_id"]
+            assert cfg["kind"] in {"ast", "clap"}
+            assert cfg["sample_rate"] in {16000, 48000}
+
+    def test_resolvable_by_full_model_id(self):
+        ast = E.BACKBONES["ast"]
+        assert E.resolve_backbone(ast["model_id"]) is ast
+
+    def test_unknown_id_falls_back_to_ast_like(self):
+        cfg = E.resolve_backbone("some-org/some-model")
+        assert cfg["model_id"] == "some-org/some-model"
+        assert cfg["kind"] == "ast"
+
+    def test_backbones_are_genuinely_distinct(self):
+        """The point of a second backbone is independence, not a near-copy."""
+        ast, clap = E.BACKBONES["ast"], E.BACKBONES["clap"]
+        assert ast["model_id"] != clap["model_id"]
+        assert ast["kind"] != clap["kind"]
+        assert ast["sample_rate"] != clap["sample_rate"]
+
+    def test_each_backbone_caches_to_its_own_file(self):
+        paths = {E._cache_path("c", cfg["model_id"]) for cfg in E.BACKBONES.values()}
+        assert len(paths) == len(E.BACKBONES)
+
+
 class TestCachePath:
     def test_slug_is_filesystem_safe(self):
         p = E._cache_path("/tmp/cache", "MIT/ast-finetuned-audioset-10-10-0.4593")
@@ -84,7 +113,7 @@ class TestProbes:
 
         results = TT.evaluate_grouped_cv(TT.build_probes(0), X, y, groups, n_splits=3)
 
-        assert set(results) == {"LogReg probe (AST emb.)", "SVM-RBF (AST emb.)"}
+        assert set(results) == {"LogReg probe", "SVM-RBF probe"}
         for res in results.values():
             assert res["accuracies"].mean() > 0.9  # signal is trivially separable
             assert len(res["y_true"]) == len(y)  # every clip tested once

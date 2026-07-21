@@ -1,7 +1,7 @@
 # MeowSense
 
 [![CI](https://github.com/sbor3937/MeowSense/actions/workflows/ci.yml/badge.svg)](https://github.com/sbor3937/MeowSense/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-0.2.0-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.3.0-blue.svg)](CHANGELOG.md)
 [![Python 3.11](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
@@ -22,7 +22,7 @@ MeowSense is my attempt to put an honest starting line in the open:
 
 - **A reproducible benchmark** on the public CatMeows dataset — fixed seeds, one command per result, no hidden preprocessing.
 - **A validation protocol that doesn't lie.** Every result is measured on cats the model has never heard. This turns out to matter enormously (see [Results](#results)).
-- **An honest negative result.** Our models land near the majority-class baseline. I report that rather than tuning until a nicer number appears.
+- **Honest results, including the negative ones.** Everything computed from the audio directly lands near the majority-class baseline; only pretrained embeddings clear it, and only modestly. I report that rather than tuning until a nicer number appears.
 - **A path forward** in [`docs/ROADMAP.md`](docs/ROADMAP.md): transfer learning from AudioSet-pretrained models, and a Telegram bot to crowdsource a much larger dataset — so that one day the answer to "what does my cat want" is a little less of a guess.
 
 ---
@@ -56,17 +56,23 @@ All numbers below are **5-fold GroupKFold grouped by cat ID** — each cat is en
 | RandomForest | MFCC | 0.49 ± 0.12 | 0.50 |
 | SVM-RBF | MFCC | 0.52 ± 0.07 | 0.50 |
 | SmallCNN (from scratch) | mel-spec | 0.53 ± 0.06 | 0.50 |
+| SVM-RBF probe | CLAP embeddings *(frozen)* | 0.54 ± 0.08 | 0.50 |
+| LogReg probe | CLAP embeddings *(frozen)* | 0.56 ± 0.07 | 0.50 |
 | LogReg probe | AST embeddings *(frozen)* | 0.58 ± 0.08 | 0.50 |
-| **SVM-RBF** | **AST embeddings *(frozen)*** | **0.60 ± 0.10** | 0.50 |
+| **SVM-RBF probe** | **AST embeddings *(frozen)*** | **0.60 ± 0.10** | 0.50 |
 
 **Two findings, one negative and one positive.**
 
 1. **Nothing computed *from the audio itself* beats the baseline.** The MFCC models and the from-scratch CNN all land at 0.49–0.53 — at or within noise of "always guess isolation". More network does not help.
-2. **A better prior does.** Freezing an AudioSet-pretrained backbone (AST, 86M params) and training a linear-ish probe on its embeddings reaches **0.60 ± 0.10** — the first model here to clear the baseline, by roughly one fold-std. It beats its per-fold baseline in 4 of 5 folds and the MFCC SVM by +0.09 on average. The gain is real but modest, and it concentrates almost entirely in `isolation`.
+2. **A better prior does — robustly, but modestly.** Freezing a large pretrained audio backbone and training a probe on its embeddings beats the baseline in **all four** backbone × probe configurations tried (+0.04 to +0.10), and beats every from-scratch model. The single best configuration is AST + SVM at **0.60 ± 0.10**.
 
-Reproduce with `python src/train_baseline.py`, `python src/train_cnn.py --cv 5`, and `python src/train_transfer.py`.
+**How much to trust the 0.60.** It is the best of four configurations, so we checked it against a genuinely independent backbone: [CLAP](https://huggingface.co/laion/clap-htsat-unfused) differs from AST in architecture (HTSAT vs ViT patches), pretraining objective (audio-text contrastive vs AudioSet classification) and input rate (48 vs 16 kHz). The **direction replicates** — CLAP also clears the baseline and also beats MFCC. The **magnitude does not**: CLAP tops out at 0.56, and AST wins only 3 of 5 folds head-to-head (mean delta +0.04). Even which probe wins flips between backbones (SVM for AST, LogReg for CLAP).
 
-> **Caveat on the AST numbers.** CatMeows is 8 kHz; AST expects 16 kHz. Upsampling restores the sample rate but not the missing 4–8 kHz band, so the backbone sees a spectrogram with an empty top half. The 0.60 is achieved *despite* that handicap — and is a direct argument for recording future data at 16 kHz+. Do not compare it against literature trained on native 16 kHz audio.
+So the defensible claim is **"frozen pretrained embeddings land at 0.54–0.60, consistently above baseline"**, not "this task is a 0.60 task". The backbone-to-backbone spread (0.04) is smaller than the fold-to-fold spread (0.07–0.10), which is another way of saying: with 21 cats, the dataset — not the model — is what limits the number. Every figure is deterministic across seeds.
+
+Reproduce with `python src/train_baseline.py`, `python src/train_cnn.py --cv 5`, and `python src/train_transfer.py [--model ast|clap]`.
+
+> **Caveat on all the embedding numbers.** CatMeows is 8 kHz; AST expects 16 kHz and CLAP 48 kHz. Upsampling restores the sample rate but not the missing 4–8 kHz band, so both backbones see a spectrogram with an empty top half — nothing like their training distribution. These numbers are achieved *despite* that handicap, which is a direct argument for recording future data at 16 kHz+. Do not compare them against literature trained on native-rate audio.
 
 ### Why the honest number is so much lower than a random split
 
@@ -83,9 +89,10 @@ This gap is the main reason this repository exists. Reproduce it in [`notebooks/
 
 ### Key findings
 
-- **Transfer learning is the payoff, and it lands on `isolation`.** The AST probe's whole advantage is on the isolation/stress class: F1 0.76 (vs 0.65 for the best MFCC model), precision 0.79. A model that has heard 2M AudioSet clips recognises a distress call better than 13 MFCCs do — but its brushing and food F1 barely move. The pretrained prior sharpens the one class that has an acoustic signature; it does not conjure signal where there is none.
-- **`isolation` is the most separable class for every model.** It is each model's best-recovered class — isolation F1 runs 0.58 / 0.65 / 0.68 / 0.76 for RandomForest / MFCC-SVM / CNN / AST-SVM. Distress calls are longer, louder and more tonal, the one context with a plausible acoustic signature.
-- **`food` is not recoverable from audio alone — not even by an 86M-parameter model** (F1 ≤ 0.37 for every model, including the AST probe). "Waiting for food" describes a *situation*, not a sound: a cat asking for dinner and a cat enjoying a brush vocalize near-identically. That the pretrained backbone cannot recover it either is strong evidence this is a **label/context problem, not a representation problem**. **A user-supplied signal — time since last meal — would help more than any better model.**
+- **Transfer learning is the payoff, and it lands on `isolation`.** Every pretrained probe's advantage sits in the isolation/stress class: F1 0.71–0.76 across both backbones, versus 0.65 for the best MFCC model, at precision 0.79. A model that has heard millions of clips recognises a distress call better than 13 MFCCs do — but brushing and food barely move. The pretrained prior sharpens the one class that has an acoustic signature; it does not conjure signal where there is none.
+- **The effect replicates across backbones; the exact number does not.** Two independent backbones (AST, CLAP) both clear the baseline and both beat every from-scratch model, but land 0.04 apart — less than the fold-to-fold spread. Treat 0.60 as the top of a 0.54–0.60 band, not as *the* number for this task.
+- **`isolation` is the most separable class for every model.** It is each model's best-recovered class — isolation F1 runs 0.58 / 0.65 / 0.68 / 0.71 / 0.76 for RandomForest / MFCC-SVM / CNN / CLAP probe / AST probe. Distress calls are longer, louder and more tonal, the one context with a plausible acoustic signature.
+- **`food` is not recoverable from audio alone — not by any model tried** (F1 ≤ 0.37 everywhere, including both 86M+ parameter backbones; CLAP's SVM manages only 0.28). "Waiting for food" describes a *situation*, not a sound: a cat asking for dinner and a cat enjoying a brush vocalize near-identically. That **two unrelated pretrained models, trained on millions of clips, both fail on it** is the strongest evidence in this repository that food is a **label/context problem, not a representation problem**. **A user-supplied signal — time since last meal — would help more than any better model.**
 - **A from-scratch CNN ties the SVM and earns nothing for it.** With a proper validation-based stopping rule (a cat-grouped validation split picks the epoch; the test set is touched once), SmallCNN reaches 0.53 ± 0.06 — level with the MFCC SVM and, like it, within noise of the 0.50 baseline. It needs far more compute than the baselines to match them and beats neither. *(An earlier fixed-60-epoch schedule under-reported this at 0.47 by scoring an arbitrary late epoch — a reminder that the protocol, not just the model, decides the number.)* 300-odd clips cannot teach general acoustic structure from zero; the way to add real signal is a better prior, not a bigger network — which the AST probe above confirms.
 - **Fold variance swamps model choice.** Per-fold accuracy ranges 0.27–0.63. With 4–5 cats per fold, *which* cats you hold out matters more than which model you pick. The binding constraint is the number of cats, not the architecture.
 - **Validation is strictly grouped by cat ID.** No clip from a test cat is ever seen during training. Assertions in `train_baseline.py` and `train_cnn.py` enforce this rather than trusting it.
@@ -152,10 +159,18 @@ SmallCNN on 40×128 log-mel spectrograms. Options: `--epochs`, `--lr`, `--batch-
 
 ```bash
 pip install transformers
-python src/train_transfer.py
+python src/train_transfer.py                 # AST backbone (the 0.60 row)
+python src/train_transfer.py --model clap    # independent replication (0.56)
 ```
 
-Extracts frozen [AST](https://huggingface.co/MIT/ast-finetuned-audioset-10-10-0.4593) embeddings (cached to `data/embeddings/` — the first run is a ~30 min CPU pass, then instant) and fits a LogReg / SVM probe under the same GroupKFold protocol. This is the 0.60 row in the table. `src/embeddings.py` runs the extraction on its own if you want to cache first.
+Extracts frozen embeddings (cached to `data/embeddings/`, so the cost is paid once) and fits LogReg / SVM probes under the same GroupKFold protocol. Two backbones are wired up:
+
+| `--model` | Backbone | Rate | First-run extraction (CPU) |
+|---|---|---|---|
+| `ast` *(default)* | [AST](https://huggingface.co/MIT/ast-finetuned-audioset-10-10-0.4593), AudioSet-finetuned, 86M | 16 kHz | ~30 min |
+| `clap` | [CLAP HTSAT](https://huggingface.co/laion/clap-htsat-unfused), audio-text contrastive, 154M | 48 kHz | ~3 min |
+
+`src/embeddings.py --model clap` runs extraction on its own if you want to cache first.
 
 ### 5. Explore the notebooks
 
@@ -208,7 +223,7 @@ changed a reported number would fail the build.
 
 See [`docs/ROADMAP.md`](docs/ROADMAP.md) for detail.
 
-- ✅ **Transfer learning** — done. Frozen AST embeddings + a linear probe hit 0.60 on unseen cats (the target), the first model here to beat the baseline. Next within this thread: try YAMNet/PANNs, and partial fine-tuning.
+- ✅ **Transfer learning** — done, and independently replicated. Frozen AST embeddings + a probe hit 0.60 on unseen cats (the target); a second, unrelated backbone (CLAP) reaches 0.56, confirming the effect while bounding the claim. Still open in this thread: YAMNet/PANNs (both need a TensorFlow path), and partial fine-tuning.
 
 In priority order from here:
 

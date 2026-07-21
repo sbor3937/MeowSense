@@ -13,11 +13,53 @@ still change. Breaking changes to any of those will bump the **minor** version.
 Planned, in priority order (see the [README roadmap](README.md#roadmap) and
 [`docs/ROADMAP.md`](docs/ROADMAP.md) for detail):
 
-- **More data — Telegram collection bot** (now the binding constraint).
-- **Transfer learning, continued** — try YAMNet / PANNs; partial fine-tuning.
+- **More data — Telegram collection bot.** Now clearly the binding constraint:
+  the spread between backbones (0.04) is smaller than the spread between folds
+  (0.07–0.10), so more cats would move the number more than a better model.
 - **Channel-normalization experiment** — decouple loudness (the `c0` cepstral
   coefficient, ~69% cat identity / ~5% context) from the context signal.
+- **Partial fine-tuning** — impractical on CPU (an AST forward pass alone is
+  ~4 s/clip); needs a GPU.
 - **Version pinning** (dependency upper bounds), now that CI can catch breakage.
+
+## [0.3.0] - 2026-07-20
+
+Independent replication of the transfer-learning result — and a correction to
+how strongly it should be stated.
+
+### Added
+- **Second backbone: [CLAP](https://huggingface.co/laion/clap-htsat-unfused)**
+  (HTSAT audio encoder, audio-text contrastive, 48 kHz). Chosen because it is
+  genuinely independent of AST — different architecture, pretraining objective
+  and input rate — so agreement between them is a result about the *task*, not
+  about one model. Extraction takes ~3 min on CPU vs AST's ~30 min.
+- `BACKBONES` registry and `resolve_backbone()` in `src/embeddings.py`; adding a
+  backbone is now a config entry rather than a fork of the extraction code.
+- `--model ast|clap` on both `src/embeddings.py` and `src/train_transfer.py`.
+- Five tests covering the registry, including an explicit check that the two
+  backbones really are distinct (architecture, sample rate, model id).
+
+### Results
+- **The direction replicates, the magnitude does not.** All four backbone ×
+  probe configurations beat the 0.50 baseline (+0.04 to +0.10) and every
+  from-scratch model — but CLAP tops out at **0.56 ± 0.07** against AST's
+  **0.60 ± 0.10**, and AST wins only 3 of 5 folds head-to-head. Which probe
+  wins even flips by backbone (SVM for AST, LogReg for CLAP).
+- README now reports a **0.54–0.60 band** rather than presenting 0.60 as *the*
+  number for this task. The backbone-to-backbone spread is smaller than the
+  fold-to-fold spread, which points at the dataset, not the architecture, as
+  the limiting factor.
+- `food` fails on **both** backbones (F1 ≤ 0.37, CLAP-SVM only 0.28) —
+  two unrelated models trained on millions of clips both missing it is the
+  strongest evidence yet that it is a label/context problem.
+- All figures deterministic across seeds.
+
+### Changed
+- Probe names in `train_transfer.py` output are now backbone-agnostic
+  (`LogReg probe`, `SVM-RBF probe`) since two backbones share them.
+- `--model` now accepts short names (`ast`, `clap`) as well as raw model ids.
+- CLAP embedding extraction handles the `audios` → `audio` processor-argument
+  rename in transformers 5.x, keeping the declared `>=4.40` floor honest.
 
 ## [0.2.0] - 2026-07-20
 
@@ -124,7 +166,8 @@ the documented commands.
   CatMeows dataset stays CC BY 4.0 and is not redistributed), and a README with
   the verified results table.
 
-[Unreleased]: https://github.com/sbor3937/MeowSense/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/sbor3937/MeowSense/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/sbor3937/MeowSense/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/sbor3937/MeowSense/compare/v0.1.3...v0.2.0
 [0.1.3]: https://github.com/sbor3937/MeowSense/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/sbor3937/MeowSense/compare/v0.1.1...v0.1.2

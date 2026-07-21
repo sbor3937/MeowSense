@@ -39,7 +39,13 @@ from sklearn.svm import SVC
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from embeddings import DEFAULT_CACHE_DIR, DEFAULT_MODEL, extract_embeddings  # noqa: E402
+from embeddings import (  # noqa: E402
+    BACKBONES,
+    DEFAULT_BACKBONE,
+    DEFAULT_CACHE_DIR,
+    extract_embeddings,
+    resolve_backbone,
+)
 from features import CONTEXT_LABELS  # noqa: E402
 from train_baseline import majority_baseline, print_confusion  # noqa: E402
 
@@ -76,7 +82,7 @@ def build_probes(seed: int) -> dict[str, Pipeline]:
         Mapping of model name -> unfitted pipeline.
     """
     return {
-        "LogReg probe (AST emb.)": Pipeline(
+        "LogReg probe": Pipeline(
             [
                 ("scale", StandardScaler()),
                 (
@@ -90,7 +96,7 @@ def build_probes(seed: int) -> dict[str, Pipeline]:
                 ),
             ]
         ),
-        "SVM-RBF (AST emb.)": Pipeline(
+        "SVM-RBF probe": Pipeline(
             [
                 ("scale", StandardScaler()),
                 (
@@ -162,13 +168,19 @@ def main() -> int:
     )
     parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
     parser.add_argument("--cache-dir", type=Path, default=DEFAULT_CACHE_DIR)
-    parser.add_argument("--model", type=str, default=DEFAULT_MODEL)
+    parser.add_argument(
+        "--model",
+        type=str,
+        default=DEFAULT_BACKBONE,
+        help=f"Backbone: {' | '.join(BACKBONES)}, or a raw HuggingFace model id.",
+    )
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     parser.add_argument("--n-splits", type=int, default=5)
     parser.add_argument("--force-extract", action="store_true")
     args = parser.parse_args()
 
     set_seed(args.seed)
+    config = resolve_backbone(args.model)
 
     try:
         X, y, groups = extract_embeddings(
@@ -212,20 +224,19 @@ def main() -> int:
         )
 
     print("\n" + "=" * 72)
-    print("SUMMARY vs the MFCC baselines (same GroupKFold protocol)")
+    print(f"SUMMARY -- backbone: {config['model_id']}")
     print("=" * 72)
     best = max(results.items(), key=lambda kv: kv[1]["accuracies"].mean())
     base = next(iter(results.values()))["baseline"]
     for name, res in results.items():
         print(f"{name:<26} {res['accuracies'].mean():.3f} +/- {res['accuracies'].std():.3f}")
     print(f"{'-- majority baseline':<26} {base:.3f}")
-    print(f"{'-- RandomForest (MFCC)':<26} 0.494")
-    print(f"{'-- SVM-RBF (MFCC)':<26} 0.515")
-    print(f"{'-- SmallCNN (from scratch)':<26} 0.530")
 
-    delta = best[1]["accuracies"].mean() - 0.530
     print(f"\nBest probe: {best[0]} at {best[1]['accuracies'].mean():.3f} "
-          f"({delta:+.3f} vs the best from-scratch model)")
+          f"({best[1]['accuracies'].mean() - base:+.3f} vs baseline)")
+    print("Compare against the from-scratch models with:")
+    print("  python src/train_baseline.py    # MFCC")
+    print("  python src/train_cnn.py --cv 5  # mel-spec CNN")
 
     return 0
 

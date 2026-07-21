@@ -4,10 +4,12 @@ The baselines in this repository establish an honest starting point: on the
 CatMeows dataset, with validation grouped strictly by cat, **nothing computed
 from the audio itself beats the majority-class baseline (~0.50)** — MFCC
 classifiers and a from-scratch CNN all land at 0.49–0.53. The first thing to
-clear the bar was a **better prior**: frozen AudioSet-pretrained (AST) embeddings
-+ a linear probe reach **0.60** (workstream 2 below, now implemented). Everything
-here follows from that shape of result — cheap priors help, more network does
-not, and the remaining ceiling looks like data and labels.
+clear the bar was a **better prior**: frozen pretrained embeddings + a probe
+reach **0.54–0.60** across two independent backbones (workstream 2 below, now
+implemented and replicated). Everything here follows from that shape of result —
+cheap priors help, more network does not, and since the spread *between*
+backbones is smaller than the spread between folds, the remaining ceiling looks
+like data and labels rather than architecture.
 
 The three workstreams are ordered by how much they would move the number:
 
@@ -153,28 +155,52 @@ Frozen embeddings + linear probe should clear **0.60 on unseen cats** (vs ~0.50
 today) to justify the added dependency. If it does not, the ceiling is the
 labels, not the model — which would itself be a finding worth publishing.
 
-### Result (implemented — v0.2.0)
+### Result (implemented — v0.2.0, replicated in v0.3.0)
 
 **The frozen probe cleared the bar: AST embeddings + SVM reach 0.60 ± 0.10 on
 unseen cats** (`src/embeddings.py`, `src/train_transfer.py`), the first model in
-this repository to beat the majority-class baseline. Notes:
+this repository to beat the majority-class baseline.
 
-- The gain over MFCC is +0.09 on average and concentrates almost entirely in
-  `isolation` (F1 0.76 vs 0.65). `food` stays unrecoverable even here (F1 0.35),
-  which is strong evidence it is a label/context problem, not a representation
-  problem — see the README key findings.
-- This was achieved **despite** the 8 kHz → 16 kHz handicap below, which caps
-  how much the pretrained prior can contribute.
-- Fold variance is large (±0.10); with 21 cats, more data would firm this up
-  more than a better backbone would.
+**It was then checked against an independent backbone**, because one model
+scoring well is a result about that model. CLAP (HTSAT encoder, audio-text
+contrastive, 48 kHz) differs from AST in architecture, objective and input rate:
+
+| Backbone | Probe | Accuracy | vs baseline | isolation F1 | food F1 |
+|---|---|---|---|---|---|
+| AST | SVM-RBF | **0.60 ± 0.10** | +0.10 | 0.76 | 0.35 |
+| AST | LogReg | 0.58 ± 0.08 | +0.08 | 0.73 | 0.37 |
+| CLAP | LogReg | 0.56 ± 0.07 | +0.06 | 0.71 | 0.34 |
+| CLAP | SVM-RBF | 0.54 ± 0.08 | +0.04 | 0.71 | 0.28 |
+
+What this says:
+
+- **The direction replicates.** All four configurations beat the 0.50 baseline
+  and every from-scratch model. Pretrained priors genuinely help here.
+- **The magnitude does not.** CLAP tops out at 0.56; AST wins only 3 of 5 folds
+  head-to-head (mean delta +0.04). Even which probe wins flips by backbone.
+  Report the 0.54–0.60 band, not 0.60 alone.
+- **Backbone spread (0.04) < fold spread (0.07–0.10).** With 21 cats, the
+  dataset limits the number more than the model does — which is why workstream 1
+  (more data) is now the priority over a better backbone.
+- `food` fails on **both** backbones (F1 ≤ 0.37). Two unrelated models trained on
+  millions of clips both missing it is the strongest evidence yet that food is a
+  label/context problem, not a representation problem.
+- All of this holds **despite** the resampling handicap below.
 
 ### Milestones
 
-- [x] `src/embeddings.py` — frozen embedding extraction with on-disk caching (AST)
+- [x] `src/embeddings.py` — frozen embedding extraction with on-disk caching
 - [x] Linear probe on frozen embeddings, same GroupKFold protocol
 - [x] Results in the README table under the *same* validation protocol
-- [ ] Try YAMNet / PANNs (needs a TensorFlow path; only AST is wired up so far)
-- [ ] Partial fine-tuning experiment (unfreeze the last block or two)
+- [x] Second, independent backbone (CLAP) as a replication check
+- [ ] YAMNet / PANNs — both need a TensorFlow (or extra weights) path; the two
+      PyTorch-native backbones already agree, so this is now low priority
+- [ ] Partial fine-tuning experiment (unfreeze the last block or two). Note the
+      cost: an AST forward pass alone is ~4 s/clip on CPU, so backprop over
+      5 folds is impractical without a GPU.
+- [ ] Probe the pre-projection CLAP encoder state (768-d) instead of the
+      projected 512-d embedding — chosen up front here to avoid selecting a
+      variant on test performance
 
 ---
 

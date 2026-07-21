@@ -20,9 +20,17 @@ these numbers against literature trained on native 16 kHz audio. It is also an
 argument for recording any crowdsourced dataset at 16 kHz or higher from day
 one (see ``docs/ROADMAP.md``).
 
+Two independent backbones are supported (see :data:`BACKBONES`), because a
+single pretrained model scoring well is a result about that model, while two
+unrelated ones agreeing is a result about the task:
+
+* ``ast``  -- AST fine-tuned on AudioSet, 16 kHz, ViT-style patches.
+* ``clap`` -- CLAP HTSAT audio encoder, 48 kHz, audio-text contrastive.
+
 Usage::
 
-    python src/embeddings.py                 # extract + cache for the dataset
+    python src/embeddings.py                 # AST (default), extract + cache
+    python src/embeddings.py --model clap    # the second backbone
     python src/embeddings.py --force         # ignore an existing cache
 """
 
@@ -42,11 +50,57 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DATA_DIR = REPO_ROOT / "data" / "raw"
 DEFAULT_CACHE_DIR = REPO_ROOT / "data" / "embeddings"
 
-# AST fine-tuned on AudioSet. Chosen because it is PyTorch-native (torch is
-# already a dependency for train_cnn) and needs no TensorFlow. YAMNet and PANNs
-# remain untried alternatives -- see docs/ROADMAP.md.
-DEFAULT_MODEL = "MIT/ast-finetuned-audioset-10-10-0.4593"
-MODEL_SAMPLE_RATE = 16000
+# Supported backbones. Both are PyTorch-native (torch is already a dependency
+# for train_cnn) and need no TensorFlow, which is why YAMNet -- a TF Hub model --
+# is still untried; see docs/ROADMAP.md.
+#
+# Two *independent* backbones are wired up on purpose. A single pretrained model
+# scoring well is a result about that model; two unrelated ones agreeing is a
+# result about the task. AST and CLAP differ in architecture (ViT-style patches
+# vs HTSAT), in training objective (AudioSet classification vs audio-text
+# contrastive) and in expected sample rate, so they are a genuine replication
+# rather than a near-duplicate.
+BACKBONES = {
+    "ast": {
+        "model_id": "MIT/ast-finetuned-audioset-10-10-0.4593",
+        "sample_rate": 16000,
+        "kind": "ast",
+        "note": "AST, fine-tuned on AudioSet (~86M params)",
+    },
+    "clap": {
+        "model_id": "laion/clap-htsat-unfused",
+        "sample_rate": 48000,
+        "kind": "clap",
+        "note": "CLAP HTSAT audio encoder, audio-text contrastive (LAION-Audio-630k)",
+    },
+}
+
+DEFAULT_BACKBONE = "ast"
+DEFAULT_MODEL = BACKBONES[DEFAULT_BACKBONE]["model_id"]
+MODEL_SAMPLE_RATE = BACKBONES[DEFAULT_BACKBONE]["sample_rate"]
+
+
+def resolve_backbone(name_or_id: str) -> dict:
+    """Resolve a short backbone name (or a raw HuggingFace id) to its config.
+
+    Args:
+        name_or_id: A key of :data:`BACKBONES` (e.g. ``"ast"``) or a full model
+            id, which is assumed to be AST-like.
+
+    Returns:
+        The backbone config dict.
+    """
+    if name_or_id in BACKBONES:
+        return BACKBONES[name_or_id]
+    for cfg in BACKBONES.values():
+        if cfg["model_id"] == name_or_id:
+            return cfg
+    return {
+        "model_id": name_or_id,
+        "sample_rate": 16000,
+        "kind": "ast",
+        "note": "custom model id (assumed AST-like)",
+    }
 
 
 def _cache_path(cache_dir: Path, model_name: str) -> Path:
@@ -55,8 +109,11 @@ def _cache_path(cache_dir: Path, model_name: str) -> Path:
     return Path(cache_dir) / f"{slug}.npz"
 
 
-def _load_backbone(model_name: str):
-    """Load the pretrained feature extractor and backbone, in eval mode.
+def _load_backbone(config: dict):
+    """Load a pretrained processor and backbone, in eval mode.
+
+    Args:
+        config: A backbone config from :func:`resolve_backbone`.
 
     Returns:
         ``(processor, model, torch)`` -- the torch module is returned so callers
@@ -67,7 +124,7 @@ def _load_backbone(model_name: str):
     """
     try:
         import torch
-        from transformers import AutoFeatureExtractor, ASTModel
+        from transformers import AutoFeatureExtractor, AutoProcessor, ASTModel, ClapModel
     except ImportError as exc:  # pragma: no cover - depends on environment
         raise ImportError(
             "Transfer-learning embeddings need `transformers` and `torch`:\n"
@@ -75,10 +132,61 @@ def _load_backbone(model_name: str):
             f"(original error: {exc})"
         ) from exc
 
-    processor = AutoFeatureExtractor.from_pretrained(model_name)
-    model = ASTModel.from_pretrained(model_name)
+    model_id = config["model_id"]
+    if config["kind"] == "clap":
+        processor = AutoProcessor.from_pretrained(model_id)
+        model = ClapModel.from_pretrained(model_id)
+    else:
+        processor = AutoFeatureExtractor.from_pretrained(model_id)
+        model = ASTModel.from_pretrained(model_id)
+
     model.eval()
     return processor, model, torch
+
+
+def _embed_batch(processor, model, torch, config: dict, waves: list) -> np.ndarray:
+    """Embed one batch of waveforms with the given backbone.
+
+    AST exposes token-level hidden states, which we mean-pool over time. CLAP
+    exposes a purpose-built pooled audio embedding, which we use directly rather
+    than re-pooling something it already pooled.
+
+    Args:
+        processor: The model's feature extractor / processor.
+        model: The loaded backbone.
+        torch: The torch module.
+        config: Backbone config.
+        waves: List of 1-D float waveforms at ``config["sample_rate"]``.
+
+    Returns:
+        Array of shape ``(len(waves), embedding_dim)``.
+    """
+    sr = config["sample_rate"]
+
+    if config["kind"] == "clap":
+        # transformers 5.x renamed this argument from `audios` to `audio`.
+        # Support both so the declared >=4.40 floor is honest.
+        try:
+            inputs = processor(audio=waves, sampling_rate=sr, return_tensors="pt")
+        except (TypeError, ValueError):
+            inputs = processor(audios=waves, sampling_rate=sr, return_tensors="pt")
+
+        with torch.no_grad():
+            out = model.get_audio_features(**inputs)
+
+        # Older versions return the projected tensor directly; 5.x returns a
+        # ModelOutput whose pooler_output is that same 512-d CLAP audio
+        # embedding (the audio-text shared space). We use the projected vector
+        # rather than the 768-d pre-projection encoder state: it is the
+        # canonical "CLAP embedding", and fixing the choice up front avoids
+        # picking whichever variant happens to score better on the test folds.
+        pooled = getattr(out, "pooler_output", out)
+        return pooled.cpu().numpy()
+
+    inputs = processor(waves, sampling_rate=sr, return_tensors="pt")
+    with torch.no_grad():
+        hidden = model(**inputs).last_hidden_state  # (B, tokens, dim)
+    return hidden.mean(dim=1).cpu().numpy()  # mean-pool over tokens
 
 
 def extract_embeddings(
@@ -96,7 +204,8 @@ def extract_embeddings(
 
     Args:
         data_dir: Directory of CatMeows WAV files.
-        model_name: HuggingFace model id of the pretrained backbone.
+        model_name: Short backbone name (``"ast"``, ``"clap"``) or a raw
+            HuggingFace model id. See :data:`BACKBONES`.
         cache_dir: Where to store/read the ``.npz`` cache.
         force: Re-extract even if a cache exists.
         batch_size: Clips per forward pass.
@@ -109,7 +218,8 @@ def extract_embeddings(
     Raises:
         FileNotFoundError: If ``data_dir`` holds no recordings.
     """
-    cache_file = _cache_path(cache_dir, model_name)
+    config = resolve_backbone(model_name)
+    cache_file = _cache_path(cache_dir, config["model_id"])
 
     if cache_file.exists() and not force:
         cached = np.load(cache_file, allow_pickle=False)
@@ -123,26 +233,22 @@ def extract_embeddings(
             f"No CatMeows WAV files in {data_dir}. Run `python src/download_data.py`."
         )
 
-    processor, model, torch = _load_backbone(model_name)
+    processor, model, torch = _load_backbone(config)
+    target_sr = config["sample_rate"]
 
     if verbose:
         n_params = sum(p.numel() for p in model.parameters())
-        print(f"Backbone: {model_name}  ({n_params / 1e6:.1f}M params, frozen)")
-        print(f"Resampling {SAMPLE_RATE} Hz -> {MODEL_SAMPLE_RATE} Hz "
+        print(f"Backbone: {config['model_id']}  ({n_params / 1e6:.1f}M params, frozen)")
+        print(f"  {config['note']}")
+        print(f"Resampling {SAMPLE_RATE} Hz -> {target_sr} Hz "
               "(does NOT restore the missing 4-8 kHz band)")
         print(f"Extracting embeddings for {len(recordings)} clips ...")
 
     vectors: list[np.ndarray] = []
     for start in range(0, len(recordings), batch_size):
         batch = recordings[start : start + batch_size]
-        waves = [load_wav(r.path, target_sr=MODEL_SAMPLE_RATE)[0] for r in batch]
-
-        inputs = processor(
-            waves, sampling_rate=MODEL_SAMPLE_RATE, return_tensors="pt"
-        )
-        with torch.no_grad():
-            hidden = model(**inputs).last_hidden_state  # (B, tokens, dim)
-        vectors.append(hidden.mean(dim=1).cpu().numpy())  # mean-pool over tokens
+        waves = [load_wav(r.path, target_sr=target_sr)[0] for r in batch]
+        vectors.append(_embed_batch(processor, model, torch, config, waves))
 
         if verbose:
             done = min(start + batch_size, len(recordings))
@@ -170,7 +276,12 @@ def main() -> int:
     )
     parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
     parser.add_argument("--cache-dir", type=Path, default=DEFAULT_CACHE_DIR)
-    parser.add_argument("--model", type=str, default=DEFAULT_MODEL)
+    parser.add_argument(
+        "--model",
+        type=str,
+        default=DEFAULT_BACKBONE,
+        help=f"Backbone: {' | '.join(BACKBONES)}, or a raw HuggingFace model id.",
+    )
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--force", action="store_true", help="Ignore any cache.")
     args = parser.parse_args()
