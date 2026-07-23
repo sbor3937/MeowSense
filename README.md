@@ -1,7 +1,7 @@
 # MeowSense
 
 [![CI](https://github.com/sbor3937/MeowSense/actions/workflows/ci.yml/badge.svg)](https://github.com/sbor3937/MeowSense/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-0.4.0-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.4.1-blue.svg)](CHANGELOG.md)
 [![Python 3.11](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
@@ -263,7 +263,7 @@ In priority order from here:
 
 In priority order from here:
 
-1. **More data — a Telegram collection bot** — grow from 21 cats to hundreds. Owners send a voice note, the bot guesses, and they answer *guessed / wrong / don't know*. Cat ID mandatory; consent and deletion handled properly from day one. This is now the binding constraint on every front: it would confirm the RMS gain on unselected data, firm up the 0.54–0.60 band, and let the label space grow.
+1. **More data — a Telegram collection bot** ([design doc](docs/BOT_DESIGN.md)) — grow from 21 cats to hundreds. Owners send a voice note, the bot guesses, and they answer *guessed / wrong / don't know*. Cat ID mandatory; consent and deletion handled properly from day one. This is now the binding constraint on every front: it would confirm the RMS gain on unselected data, firm up the 0.54–0.60 band, and let the label space grow.
 2. **A larger label space** — add `greeting`, `play`, and (carefully, with veterinary confirmation) `pain`.
 3. **Record at 16 kHz+** — the 8 kHz ceiling handicaps every pretrained backbone.
 

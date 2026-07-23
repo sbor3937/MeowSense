@@ -41,6 +41,11 @@ will not relax the grouped-validation rule to make numbers look better.
 **Goal:** grow from 21 cats to hundreds, with labels that carry the situational
 context the audio alone cannot.
 
+> **A full design document now exists: [`docs/BOT_DESIGN.md`](BOT_DESIGN.md)** —
+> interaction flow, data schema, consent/deletion mechanics, architecture,
+> security, and the decisions a maintainer must make before any deployment. The
+> summary below is the overview; that document is the plan.
+
 ### Why Telegram
 
 Cat owners already record their cats. A bot removes every step between "my cat

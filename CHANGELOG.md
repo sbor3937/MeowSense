@@ -13,14 +13,29 @@ still change. Breaking changes to any of those will bump the **minor** version.
 Planned, in priority order (see the [README roadmap](README.md#roadmap) and
 [`docs/ROADMAP.md`](docs/ROADMAP.md) for detail):
 
-- **More data — Telegram collection bot.** Now the binding constraint on every
-  front: it would validate the RMS gain on unselected data, firm up the
-  0.54–0.60 band, and let the label space grow.
+- **Build the Telegram collection bot** per [`docs/BOT_DESIGN.md`](docs/BOT_DESIGN.md),
+  once the maintainer settles the legal/hosting/token decisions it lists.
 - **Promote RMS normalization to the default pipeline**, once it can be
   validated on data that was not used to select it.
 - **Partial fine-tuning** — impractical on CPU (an AST forward pass alone is
   ~4 s/clip); needs a GPU.
 - **Version pinning** (dependency upper bounds), now that CI can catch breakage.
+
+## [0.4.1] - 2026-07-23
+
+### Added
+- **`docs/BOT_DESIGN.md`** — full design document for the crowdsourced-data
+  Telegram bot (roadmap workstream 1): end-to-end interaction flow, a concrete
+  de-identified data model (owner / cat / clip, with mandatory `cat_id` and a
+  CatMeows-compatible export), consent copy, a real `/delete_my_data` mechanic,
+  data-quality controls, architecture that reuses the repo's model path,
+  security notes, a phased rollout that builds consent and deletion *before*
+  collection, and an explicit list of decisions the maintainer must make
+  (jurisdiction/legal review, hosting, bot token) before any deployment.
+- Linked from the README roadmap and `docs/ROADMAP.md`.
+
+Docs only — no code or dependency changes. The bot is not built; this is the
+plan for it.
 
 ## [0.4.0] - 2026-07-21
 
@@ -206,7 +221,8 @@ the documented commands.
   CatMeows dataset stays CC BY 4.0 and is not redistributed), and a README with
   the verified results table.
 
-[Unreleased]: https://github.com/sbor3937/MeowSense/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/sbor3937/MeowSense/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/sbor3937/MeowSense/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/sbor3937/MeowSense/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/sbor3937/MeowSense/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/sbor3937/MeowSense/compare/v0.1.3...v0.2.0
