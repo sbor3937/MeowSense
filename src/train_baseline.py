@@ -323,6 +323,15 @@ def main() -> int:
     parser.add_argument(
         "--save-plots", action="store_true", help="Write confusion matrices to artifacts/."
     )
+    parser.add_argument(
+        "--rms-norm",
+        action="store_true",
+        help="Normalize each waveform to a fixed RMS before extracting MFCCs, "
+             "removing recording gain. Raises RandomForest from ~0.49 to ~0.57 "
+             "and roughly halves fold variance -- see "
+             "src/experiment_channel_norm.py. Off by default because it was "
+             "selected on the same folds the README reports.",
+    )
     args = parser.parse_args()
 
     set_seed(args.seed)
@@ -340,7 +349,9 @@ def main() -> int:
     print(f"Found {len(recordings)} recordings from "
           f"{len(set(r.cat_id for r in recordings))} cats in {args.data_dir}")
     print("Extracting MFCC features ...")
-    X, y, groups = extract_feature_matrix(recordings, kind="mfcc")
+    if args.rms_norm:
+        print("  (RMS gain normalization enabled)")
+    X, y, groups = extract_feature_matrix(recordings, kind="mfcc", rms_norm=args.rms_norm)
     print(f"  X={X.shape}  y={y.shape}  cats={len(set(groups))}")
 
     counts = {CONTEXT_LABELS[c]: int((y == c).sum()) for c in CLASS_ORDER}

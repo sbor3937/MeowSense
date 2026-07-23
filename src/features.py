@@ -60,9 +60,11 @@ __all__ = [
     "Recording",
     "parse_filename",
     "load_wav",
+    "rms_normalize",
     "mel_filterbank",
     "log_mel_spectrogram",
     "mfcc",
+    "cepstral_normalize",
     "mfcc_feature_vector",
     "fixed_size_log_mel",
     "scan_dataset",
@@ -283,6 +285,74 @@ def load_wav(path: str | Path, target_sr: int = SAMPLE_RATE) -> tuple[np.ndarray
 # --------------------------------------------------------------------------
 
 
+def rms_normalize(
+    y: np.ndarray, target_rms: float = 0.1, eps: float = 1e-8
+) -> np.ndarray:
+    """Scale a waveform to a fixed RMS level.
+
+    This removes *gain* differences -- how loud the recording was made, which
+    depends on mic distance and device settings rather than on the cat. It does
+    not remove the spectral *shape* a channel imposes; that is what
+    :func:`cepstral_normalize` targets.
+
+    Silent clips are returned unchanged rather than amplified into noise.
+
+    Args:
+        y: 1-D signal.
+        target_rms: Desired root-mean-square amplitude.
+        eps: Below this RMS the clip is treated as silent.
+
+    Returns:
+        The rescaled signal, float32.
+    """
+    rms = float(np.sqrt(np.mean(np.square(y, dtype=np.float64))))
+    if rms < eps:
+        return np.asarray(y, dtype=np.float32)
+    return (np.asarray(y, dtype=np.float64) * (target_rms / rms)).astype(np.float32)
+
+
+def cepstral_normalize(
+    coeffs: np.ndarray, mode: str = "mean", eps: float = 1e-5
+) -> np.ndarray:
+    """Cepstral mean (and variance) normalization over time, per clip.
+
+    A fixed recording channel is convolutional in the time domain, which becomes
+    *additive* in the cepstral domain. Subtracting each coefficient's mean over
+    the clip therefore cancels a constant channel -- the classical CMN trick
+    from speaker recognition. Dividing by the standard deviation as well (CMVN)
+    additionally equalizes how much each coefficient varies.
+
+    **Note the interaction with** :func:`mfcc_feature_vector`: it summarizes a
+    clip by the mean and std of each coefficient, so applying CMN here forces
+    the mean block to exactly zero. That block carries no information after
+    normalization and should be dropped by the caller.
+
+    Args:
+        coeffs: MFCC matrix of shape ``(n_mfcc, n_frames)``.
+        mode: ``"mean"`` for CMN, ``"meanvar"`` for CMVN.
+        eps: Standard deviations at or below this are treated as "no variation
+            to normalize" and left unscaled. Adding a tiny epsilon instead
+            would divide float32 rounding noise by itself and amplify a
+            near-constant coefficient into full-scale garbage.
+
+    Returns:
+        The normalized coefficients, same shape.
+
+    Raises:
+        ValueError: If ``mode`` is not a supported value.
+    """
+    if mode not in {"mean", "meanvar"}:
+        raise ValueError(f"mode must be 'mean' or 'meanvar', got {mode!r}")
+
+    out = coeffs - coeffs.mean(axis=1, keepdims=True)
+    if mode == "meanvar":
+        std = coeffs.std(axis=1, keepdims=True)
+        # Leave degenerate (near-constant) coefficients alone: they are already
+        # ~0 after mean removal, and scaling them just amplifies noise.
+        out = out / np.where(std > eps, std, 1.0)
+    return out.astype(np.float32)
+
+
 def _hz_to_mel(freq: np.ndarray | float) -> np.ndarray | float:
     """Convert Hz to mels (O'Shaughnessy / HTK formula)."""
     return 2595.0 * np.log10(1.0 + np.asarray(freq, dtype=np.float64) / 700.0)
@@ -461,6 +531,7 @@ def mfcc_feature_vector(
     y: np.ndarray,
     sample_rate: int = SAMPLE_RATE,
     n_mfcc: int = N_MFCC,
+    cmvn: str | None = None,
     **kwargs,
 ) -> np.ndarray:
     """Summarize a variable-length clip as one fixed-length MFCC vector.
@@ -475,13 +546,29 @@ def mfcc_feature_vector(
         y: 1-D signal.
         sample_rate: Sample rate of ``y``.
         n_mfcc: Number of cepstral coefficients.
+        cmvn: If set (``"mean"`` or ``"meanvar"``), apply
+            :func:`cepstral_normalize` first. Because that forces every
+            coefficient's temporal mean to zero, the mean block is then dropped
+            and the vector is ``3 * n_mfcc`` long instead of ``4 * n_mfcc``.
         **kwargs: Forwarded to :func:`log_mel_spectrogram` via :func:`mfcc`.
 
     Returns:
         1-D array of length ``4 * n_mfcc`` (52 for the default n_mfcc=13),
-        ordered as ``[mfcc_mean, mfcc_std, delta_mean, delta_std]``.
+        ordered as ``[mfcc_mean, mfcc_std, delta_mean, delta_std]`` -- or
+        ``3 * n_mfcc`` ordered as ``[mfcc_std, delta_mean, delta_std]`` when
+        ``cmvn`` is set.
     """
     coeffs = mfcc(y, sample_rate=sample_rate, n_mfcc=n_mfcc, **kwargs)
+
+    if cmvn is not None:
+        coeffs = cepstral_normalize(coeffs, mode=cmvn)
+        d = _delta(coeffs)
+        # coeffs.mean(axis=1) is identically zero here, so it is omitted rather
+        # than shipped as a block of constant columns.
+        return np.concatenate(
+            [coeffs.std(axis=1), d.mean(axis=1), d.std(axis=1)]
+        ).astype(np.float32)
+
     d = _delta(coeffs)
     return np.concatenate(
         [coeffs.mean(axis=1), coeffs.std(axis=1), d.mean(axis=1), d.std(axis=1)]
@@ -559,6 +646,8 @@ def spectral_centroid(
 def extract_feature_matrix(
     recordings: Iterable[Recording],
     kind: str = "mfcc",
+    rms_norm: bool = False,
+    cmvn: str | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Extract features for a set of recordings.
 
@@ -566,6 +655,12 @@ def extract_feature_matrix(
         recordings: Recordings to process, e.g. from :func:`scan_dataset`.
         kind: ``"mfcc"`` for flat summary vectors (baselines) or ``"logmel"``
             for fixed-size spectrogram patches (CNN).
+        rms_norm: Rescale each waveform to a fixed RMS before extraction,
+            removing recording gain. See ``src/experiment_channel_norm.py`` --
+            this measurably helps, but is off by default because it was chosen
+            on the same folds the README reports.
+        cmvn: Optional per-clip cepstral normalization (``"mean"`` or
+            ``"meanvar"``); ``kind="mfcc"`` only.
 
     Returns:
         ``(X, y, groups)`` where ``X`` is the feature array, ``y`` holds the
@@ -573,16 +668,21 @@ def extract_feature_matrix(
         be passed to a grouped cross-validator.
 
     Raises:
-        ValueError: If ``kind`` is not one of the supported values.
+        ValueError: If ``kind`` is not one of the supported values, or ``cmvn``
+            is combined with ``kind="logmel"``.
     """
     if kind not in {"mfcc", "logmel"}:
         raise ValueError(f"kind must be 'mfcc' or 'logmel', got {kind!r}")
+    if cmvn is not None and kind != "mfcc":
+        raise ValueError("cmvn applies to kind='mfcc' only")
 
     feats, labels, groups = [], [], []
     for rec in recordings:
         signal, sr = load_wav(rec.path)
+        if rms_norm:
+            signal = rms_normalize(signal)
         if kind == "mfcc":
-            feats.append(mfcc_feature_vector(signal, sample_rate=sr))
+            feats.append(mfcc_feature_vector(signal, sample_rate=sr, cmvn=cmvn))
         else:
             feats.append(fixed_size_log_mel(signal, sample_rate=sr))
         labels.append(rec.context)

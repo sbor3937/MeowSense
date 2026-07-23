@@ -1,7 +1,7 @@
 # MeowSense
 
 [![CI](https://github.com/sbor3937/MeowSense/actions/workflows/ci.yml/badge.svg)](https://github.com/sbor3937/MeowSense/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-0.3.0-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.4.0-blue.svg)](CHANGELOG.md)
 [![Python 3.11](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
@@ -86,6 +86,29 @@ The same models, same features, evaluated two ways:
 A random split scatters one cat's clips across both train and test. The model then learns to recognise *which cat is meowing* — a cat it has already heard — rather than *what the meow means*, and reports ~0.70. That number is an artifact. With only 21 cats and 440 clips, it is very easy to produce by accident.
 
 This gap is the main reason this repository exists. Reproduce it in [`notebooks/02_baselines.ipynb`](notebooks/02_baselines.ipynb).
+
+### What the recording channel costs you
+
+A second artifact, found by asking what the MFCC energy coefficient `c0` actually encodes. Answer: **69% of its variance is explained by *which cat* produced the clip, and only 5.5% by the emission context.** It looks like pure nuisance — but deleting it makes accuracy *worse* (−0.03 to −0.04). Signal and nuisance share the coefficient, so the fix is not deletion but normalization.
+
+`python src/experiment_channel_norm.py` compares six ways to strip the channel (RandomForest shown; SVM in the script output):
+
+| Variant | Accuracy | Δ | isolation F1 | |
+|---|---|---|---|---|
+| baseline | 0.494 ± 0.120 | — | 0.58 | |
+| **RMS gain normalization** | **0.569 ± 0.069** | **+0.074** | 0.70 | inductive |
+| per-clip CMN | 0.507 ± 0.045 | +0.013 | 0.61 | inductive |
+| per-clip CMVN | 0.466 ± 0.104 | −0.028 | 0.60 | inductive |
+| per-cat centering | 0.548 ± 0.032 | +0.054 | 0.68 | *transductive* |
+| per-owner centering | 0.568 ± 0.032 | +0.074 | 0.71 | *transductive* |
+
+Three things worth noting:
+
+1. **The winner is the cheapest thing on the list, and it needs nothing from the test set.** Rescaling each waveform to a fixed RMS — three lines of numpy — recovers +0.074 and **roughly halves the fold variance** (0.120 → 0.069). The worst fold goes from 0.27 to 0.44. Across 10 seeds the two ranges do not overlap ([0.499, 0.526] vs [0.564, 0.587]).
+2. **Removing absolute loudness *helps* detect distress calls** (isolation F1 0.58 → 0.70), which is counterintuitive — isolation calls are the loud ones. It means recorded loudness tracked mic distance more than it tracked the cat, and the *relative* spectral shape of a distress call is the more reliable cue.
+3. **The pretrained backbones barely benefit** (per-cat centering moves the AST probe by +0.02 at best, and *hurts* the LogReg probe by −0.10). They were trained on millions of clips from wildly varying recording setups, so they are already largely channel-invariant. Which reframes the transfer-learning result: **a good chunk of what the 86M-parameter model was buying is channel invariance you can get for free.** RandomForest + RMS (0.57) closes about 70% of the gap from the old baseline to AST (0.60), at no model cost.
+
+> **Why this is not in the headline table.** The RMS variant was picked as the best of six on the *same* folds the table reports, so +0.074 is an optimistic estimate of the true gain — exactly the selection effect this repo criticises elsewhere. The effect itself is well-corroborated (two independent normalization routes, RMS and per-owner centering, both land on +0.074; seed ranges disjoint), but the magnitude is not clean. It is therefore opt-in — `python src/train_baseline.py --rms-norm` — and stays out of the reported numbers until it can be validated on data that was not used to choose it.
 
 ### Key findings
 
@@ -172,7 +195,16 @@ Extracts frozen embeddings (cached to `data/embeddings/`, so the cost is paid on
 
 `src/embeddings.py --model clap` runs extraction on its own if you want to cache first.
 
-### 5. Explore the notebooks
+### 5. Run the channel-normalization experiment
+
+```bash
+python src/experiment_channel_norm.py                  # MFCC variants
+python src/experiment_channel_norm.py --embeddings ast # same test on embeddings
+```
+
+Compares six ways of stripping the recording channel, marking which are inductive and which are transductive. Produces the table in [What the recording channel costs you](#what-the-recording-channel-costs-you).
+
+### 6. Explore the notebooks
 
 ```bash
 jupyter notebook notebooks/
@@ -227,9 +259,13 @@ See [`docs/ROADMAP.md`](docs/ROADMAP.md) for detail.
 
 In priority order from here:
 
-1. **More data — a Telegram collection bot** — grow from 21 cats to hundreds. Owners send a voice note, the bot guesses, and they answer *guessed / wrong / don't know*. Cat ID mandatory; consent and deletion handled properly from day one. With the AST probe now capped at 0.60 partly by the 8 kHz audio and the tiny cat count, data is the binding constraint again.
+- ✅ **Channel normalization** — done. RMS gain normalization recovers +0.07 and halves fold variance; see [above](#what-the-recording-channel-costs-you). Opt-in via `--rms-norm` pending validation on independent data.
+
+In priority order from here:
+
+1. **More data — a Telegram collection bot** — grow from 21 cats to hundreds. Owners send a voice note, the bot guesses, and they answer *guessed / wrong / don't know*. Cat ID mandatory; consent and deletion handled properly from day one. This is now the binding constraint on every front: it would confirm the RMS gain on unselected data, firm up the 0.54–0.60 band, and let the label space grow.
 2. **A larger label space** — add `greeting`, `play`, and (carefully, with veterinary confirmation) `pain`.
-3. **Channel normalization** — decouple loudness (the `c0` coefficient, ~69% cat identity) from the context signal.
+3. **Record at 16 kHz+** — the 8 kHz ceiling handicaps every pretrained backbone.
 
 **Non-goals:** shipping a "cat translator"; beating published numbers by relaxing the grouped-validation rule.
 

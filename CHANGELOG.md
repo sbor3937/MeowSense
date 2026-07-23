@@ -13,14 +13,54 @@ still change. Breaking changes to any of those will bump the **minor** version.
 Planned, in priority order (see the [README roadmap](README.md#roadmap) and
 [`docs/ROADMAP.md`](docs/ROADMAP.md) for detail):
 
-- **More data — Telegram collection bot.** Now clearly the binding constraint:
-  the spread between backbones (0.04) is smaller than the spread between folds
-  (0.07–0.10), so more cats would move the number more than a better model.
-- **Channel-normalization experiment** — decouple loudness (the `c0` cepstral
-  coefficient, ~69% cat identity / ~5% context) from the context signal.
+- **More data — Telegram collection bot.** Now the binding constraint on every
+  front: it would validate the RMS gain on unselected data, firm up the
+  0.54–0.60 band, and let the label space grow.
+- **Promote RMS normalization to the default pipeline**, once it can be
+  validated on data that was not used to select it.
 - **Partial fine-tuning** — impractical on CPU (an AST forward pass alone is
   ~4 s/clip); needs a GPU.
 - **Version pinning** (dependency upper bounds), now that CI can catch breakage.
+
+## [0.4.0] - 2026-07-21
+
+Channel normalization: the recording setup was costing ~0.07 accuracy, and most
+of it is recoverable for free.
+
+### Added
+- **`src/experiment_channel_norm.py`** — compares six ways of stripping the
+  recording channel (RMS gain, per-clip CMN/CMVN, per-cat and per-owner
+  centering), clearly separating inductive variants from transductive ones, and
+  optionally repeats the test on cached embeddings (`--embeddings ast`).
+- **`rms_normalize()`** and **`cepstral_normalize()`** in `src/features.py`;
+  `extract_feature_matrix()` gains `rms_norm=` and `cmvn=` options.
+- **`--rms-norm`** flag on `src/train_baseline.py`.
+- Twelve tests covering the new primitives, including gain-invariance and a
+  regression test for the degenerate-input bug below.
+
+### Results
+- **RMS gain normalization recovers +0.074** for RandomForest (0.494 → 0.569)
+  and roughly **halves fold variance** (0.120 → 0.069); the worst fold rises
+  from 0.27 to 0.44. Across 10 seeds the baseline and RMS ranges are disjoint.
+  It is fully inductive — nothing about the test cats is used.
+- **Removing absolute loudness improves distress detection** (isolation F1
+  0.58 → 0.70): recorded loudness tracked mic distance more than the cat.
+- **CMVN hurts** (−0.028 RF, −0.066 SVM) — equalizing per-coefficient variance
+  destroys real signal; only the channel mean should go.
+- **Pretrained embeddings barely benefit** (+0.02 at best; −0.10 for the AST
+  LogReg probe), because they are already largely channel-invariant. This
+  reframes the transfer-learning result: a meaningful share of what an
+  86M-parameter backbone buys here is channel invariance available for free.
+- **Not promoted to the default pipeline.** The winner was selected among six
+  variants on the same folds used for reporting, so +0.074 is an optimistic
+  estimate. The effect is well-corroborated (two independent routes agree;
+  disjoint seed ranges); the magnitude is not clean. Opt-in until it can be
+  validated on independent data. Headline table unchanged.
+
+### Fixed
+- `cepstral_normalize(mode="meanvar")` divided near-zero variance by itself on
+  near-constant input, amplifying float32 rounding noise to full scale. Found
+  by its own unit test. Degenerate coefficients are now left unscaled.
 
 ## [0.3.0] - 2026-07-20
 
@@ -166,7 +206,8 @@ the documented commands.
   CatMeows dataset stays CC BY 4.0 and is not redistributed), and a README with
   the verified results table.
 
-[Unreleased]: https://github.com/sbor3937/MeowSense/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/sbor3937/MeowSense/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/sbor3937/MeowSense/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/sbor3937/MeowSense/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/sbor3937/MeowSense/compare/v0.1.3...v0.2.0
 [0.1.3]: https://github.com/sbor3937/MeowSense/compare/v0.1.2...v0.1.3

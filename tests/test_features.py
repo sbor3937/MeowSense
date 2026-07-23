@@ -158,6 +158,64 @@ class TestSpectralFeatures:
         assert abs(low - 500.0) < 300.0
 
 
+class TestChannelNormalization:
+    def test_rms_normalize_hits_target_level(self):
+        loud = make_tone(1000.0, 1.0) * 0.9
+        quiet = make_tone(1000.0, 1.0) * 0.02
+        for sig in (loud, quiet):
+            out = F.rms_normalize(sig, target_rms=0.1)
+            assert np.sqrt(np.mean(out**2)) == pytest.approx(0.1, abs=1e-3)
+
+    def test_rms_normalize_equalizes_gain_difference(self):
+        """The same call at two volumes must become the same signal."""
+        base = make_tone(1000.0, 1.0)
+        a = F.rms_normalize(base * 0.9)
+        b = F.rms_normalize(base * 0.05)
+        assert np.allclose(a, b, atol=1e-5)
+
+    def test_rms_normalize_leaves_silence_alone(self):
+        silence = np.zeros(8000, dtype=np.float32)
+        assert np.allclose(F.rms_normalize(silence), silence)
+
+    def test_cmn_zeroes_the_temporal_mean(self):
+        coeffs = F.mfcc(make_tone(1000.0, 1.5))
+        out = F.cepstral_normalize(coeffs, mode="mean")
+        assert np.allclose(out.mean(axis=1), 0.0, atol=1e-4)
+
+    def test_cmvn_also_unit_scales(self):
+        # A steady tone gives near-constant frames, which is the degenerate
+        # case; use a sweep so each coefficient genuinely varies over time.
+        sweep = np.concatenate([make_tone(f, 0.4) for f in (400, 900, 1800, 3000)])
+        out = F.cepstral_normalize(F.mfcc(sweep), mode="meanvar")
+        assert np.allclose(out.mean(axis=1), 0.0, atol=1e-4)
+        assert np.allclose(out.std(axis=1), 1.0, atol=1e-2)
+
+    def test_cmvn_does_not_explode_on_constant_input(self):
+        """Regression: dividing near-zero variance by itself amplified float
+        noise to full scale. Degenerate coefficients must stay put."""
+        constant = np.ones((13, 50), dtype=np.float32) * 3.0
+        out = F.cepstral_normalize(constant, mode="meanvar")
+        assert np.allclose(out, 0.0, atol=1e-6)
+        assert np.isfinite(out).all()
+
+    def test_cepstral_normalize_rejects_bad_mode(self):
+        with pytest.raises(ValueError):
+            F.cepstral_normalize(F.mfcc(make_tone(1000.0, 0.5)), mode="nope")
+
+    def test_cmvn_shortens_feature_vector(self):
+        """CMN zeroes the mean block, so it is dropped: 4n -> 3n."""
+        tone = make_tone(1000.0, 1.5)
+        assert F.mfcc_feature_vector(tone).shape == (4 * F.N_MFCC,)
+        assert F.mfcc_feature_vector(tone, cmvn="mean").shape == (3 * F.N_MFCC,)
+
+    def test_cmn_makes_features_gain_invariant(self):
+        """Cepstral mean normalization should absorb a pure gain change."""
+        base = make_tone(1000.0, 1.5)
+        a = F.mfcc_feature_vector(base * 0.8, cmvn="mean")
+        b = F.mfcc_feature_vector(base * 0.1, cmvn="mean")
+        assert np.allclose(a, b, atol=1e-2)
+
+
 class TestFixedSizeLogMel:
     def test_exact_frame_count_when_padded(self):
         S = F.fixed_size_log_mel(make_tone(1000.0, 0.3))  # short -> padded
@@ -247,3 +305,18 @@ class TestScanDataset:
         recs = F.scan_dataset(synthetic_dataset)
         with pytest.raises(ValueError):
             F.extract_feature_matrix(recs, kind="nope")
+
+    def test_extract_feature_matrix_rms_norm(self, synthetic_dataset):
+        recs = F.scan_dataset(synthetic_dataset)
+        X, _, _ = F.extract_feature_matrix(recs, kind="mfcc", rms_norm=True)
+        assert X.shape == (6, 4 * F.N_MFCC)
+
+    def test_extract_feature_matrix_cmvn_shortens(self, synthetic_dataset):
+        recs = F.scan_dataset(synthetic_dataset)
+        X, _, _ = F.extract_feature_matrix(recs, kind="mfcc", cmvn="mean")
+        assert X.shape == (6, 3 * F.N_MFCC)
+
+    def test_cmvn_rejected_for_logmel(self, synthetic_dataset):
+        recs = F.scan_dataset(synthetic_dataset)
+        with pytest.raises(ValueError):
+            F.extract_feature_matrix(recs, kind="logmel", cmvn="mean")

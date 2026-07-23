@@ -16,6 +16,7 @@ The three workstreams are ordered by how much they would move the number:
 1. **More data** (now the binding constraint) — [Telegram collection bot](#1-telegram-collection-bot)
 2. **Better priors** ✅ *(done — AST probe at 0.60)* — [Transfer learning](#2-transfer-learning)
 3. **A more useful label space** — [Expanding to 5-6 classes](#3-expanding-the-label-space)
+4. **Removing the recording channel** ✅ *(done — +0.07, halved variance)* — [Channel normalization](#4-channel-normalization-done)
 
 ---
 
@@ -28,6 +29,7 @@ Three structural problems, none of which are fixed by tuning hyperparameters:
 | **Too few cats** | 21 cats, 440 clips | A held-out fold contains 4-5 cats. One unusual animal swings fold accuracy by 10+ points (observed fold spread: 0.27-0.63). |
 | **Context is not fully acoustic** | `food` recall 0.22-0.38 | "Waiting for food" and "brushing" can produce near-identical calls. The label depends on the *situation*, not only the signal. |
 | **Individual variation dominates** | Accuracy collapses when moving from random splits to cat-grouped splits | Models learn *who is meowing* faster than *what they mean*. |
+| **The recording channel leaks identity** | `c0` is 69% explained by cat, 5.5% by context; RMS normalization recovers +0.07 | Part of "individual variation" was never the cat at all — it was the microphone. Partly fixable ([experiment](#4-channel-normalization-done)). |
 
 The first is a data problem. The second is a label problem. The third is why we
 will not relax the grouped-validation rule to make numbers look better.
@@ -232,6 +234,56 @@ Target label set (pending enough crowdsourced data to support it):
   scope it as research, and say so loudly in any user-facing surface.
 - Revisit whether these should be mutually exclusive at all. Multi-label may fit
   reality better — a cat can greet *and* ask for food in one breath.
+
+---
+
+## 4. Channel normalization (done)
+
+Implemented in `src/experiment_channel_norm.py`. Started from a puzzle: the MFCC
+energy coefficient `c0` is 69% explained by cat identity and only 5.5% by
+context, yet **deleting it makes accuracy worse** (−0.03 to −0.04). Signal and
+nuisance share the coefficient, so the fix had to be normalization.
+
+Six variants, scored under the usual GroupKFold-by-cat (RandomForest):
+
+| Variant | Accuracy | Δ | |
+|---|---|---|---|
+| baseline | 0.494 ± 0.120 | — | |
+| **RMS gain normalization** | **0.569 ± 0.069** | **+0.074** | inductive |
+| per-clip CMN | 0.507 ± 0.045 | +0.013 | inductive |
+| per-clip CMVN | 0.466 ± 0.104 | −0.028 | inductive |
+| per-cat centering | 0.548 ± 0.032 | +0.054 | *transductive* |
+| per-owner centering | 0.568 ± 0.032 | +0.074 | *transductive* |
+
+Findings:
+
+- **The cheapest, fully inductive variant wins.** RMS normalization recovers
+  +0.074 and roughly halves fold variance (0.120 → 0.069); the worst fold rises
+  from 0.27 to 0.44. Seed ranges are disjoint across 10 seeds.
+- **Removing absolute loudness improves distress detection** (isolation F1
+  0.58 → 0.70) — recorded loudness tracked mic distance more than it tracked
+  the cat.
+- **CMVN hurts.** Equalizing per-coefficient variance destroys real signal;
+  only the mean (channel) term should go.
+- **Pretrained embeddings barely benefit** (+0.02 at best for AST-SVM; −0.10 for
+  the LogReg probe). They are already largely channel-invariant, which means a
+  meaningful share of what transfer learning buys here is channel invariance
+  obtainable for free.
+
+**Why it is opt-in rather than the default.** The winner was chosen among six
+variants on the same folds used for reporting, so +0.074 is an optimistic
+estimate of the true gain — the selection effect this project criticises
+elsewhere. The *effect* is well-corroborated (two independent routes agree;
+disjoint seed ranges), the *magnitude* is not clean. Available via
+`python src/train_baseline.py --rms-norm`.
+
+### Milestones
+
+- [x] Quantify what `c0` encodes (variance explained by cat / owner / context)
+- [x] Compare inductive and transductive normalization variants
+- [x] Check whether the same fix helps pretrained embeddings
+- [ ] Validate the RMS gain on data not used to select it, then promote it to
+      the default pipeline — blocked on workstream 1
 
 ---
 
